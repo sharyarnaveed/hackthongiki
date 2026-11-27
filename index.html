@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#172b2b">
+  <title>Little Pixel World</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Courier New", monospace;
+      background: #172b2b;
+      color: #f5efcf;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(ellipse at 50% 20%, #31504a 0, transparent 55%),
+        #172b2b;
+    }
+
+    main { width: min(100%, 800px); }
+
+    header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.25rem, 4vw, 2rem);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .hint {
+      margin: 4px 0 0;
+      color: #b7c8a4;
+      font-size: 0.8rem;
+    }
+
+    #location {
+      color: #f0c879;
+      font-size: 0.8rem;
+      text-align: right;
+    }
+
+    .frame {
+      overflow: hidden;
+      border: 4px solid #d6bd7a;
+      border-radius: 4px;
+      background: #385e48;
+      box-shadow: 0 12px 0 #101e1e, 0 20px 40px #09121299;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+    }
+
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    #message {
+      min-height: 1.2em;
+      margin: 0;
+      color: #d3dfbd;
+      font-size: 0.85rem;
+    }
+
+    .pad {
+      display: grid;
+      grid-template: repeat(2, 42px) / repeat(3, 42px);
+      gap: 4px;
+    }
+
+    .pad button {
+      border: 1px solid #718a69;
+      border-radius: 4px;
+      background: #29433e;
+      color: #f5efcf;
+      font: inherit;
+      font-size: 1.1rem;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+
+    .pad button:hover, .pad button:focus-visible { background: #426251; }
+    .pad [data-dir="up"] { grid-area: 1 / 2; }
+    .pad [data-dir="left"] { grid-area: 2 / 1; }
+    .pad [data-dir="down"] { grid-area: 2 / 2; }
+    .pad [data-dir="right"] { grid-area: 2 / 3; }
+
+    @media (max-width: 520px) {
+      body { padding: 16px; }
+      header { align-items: start; }
+      footer { align-items: end; }
+      #message { max-width: 55%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Little Pixel World</h1>
+        <p class="hint">A tiny place to wander</p>
+      </div>
+      <div id="location" aria-live="polite">Meadow</div>
+    </header>
+    <div class="frame">
+      <canvas id="world" width="512" height="320" aria-label="A pixel-art meadow with a character, trees, and a pond">
+        Your browser does not support canvas.
+      </canvas>
+    </div>
+    <footer>
+      <p id="message" aria-live="polite">Explore with the arrow keys or WASD.</p>
+      <div class="pad" aria-label="Movement controls">
+        <button type="button" data-dir="up" aria-label="Move up">↑</button>
+        <button type="button" data-dir="left" aria-label="Move left">←</button>
+        <button type="button" data-dir="down" aria-label="Move down">↓</button>
+        <button type="button" data-dir="right" aria-label="Move right">→</button>
+      </div>
+    </footer>
+  </main>
+  <script>
+    const canvas = document.querySelector("#world");
+    const ctx = canvas.getContext("2d");
+    const tile = 16;
+    const columns = canvas.width / tile;
+    const rows = canvas.height / tile;
+    const player = { x: 15, y: 10 };
+    const directions = {
+      ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+      ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+      ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+      ArrowRight: [1, 0], d: [1, 0], D: [1, 0]
+    };
+    const blocked = new Set([
+      "4,4", "5,4", "4,5", "10,3", "11,3", "10,4",
+      "21,5", "22,5", "21,6", "6,13", "7,13", "6,14",
+      "26,14", "27,14", "26,15"
+    ]);
+    const water = (x, y) => x >= 20 && x <= 25 && y >= 7 && y <= 11;
+    const path = (x, y) => (y >= 9 && y <= 10 && x > 2 && x < 20) ||
+      (x >= 13 && x <= 14 && y > 9 && y < 18);
+
+    function drawTile(x, y) {
+      const px = x * tile;
+      const py = y * tile;
+      if (water(x, y)) {
+        ctx.fillStyle = (x + y) % 3 ? "#438e9a" : "#4b9eaa";
+        ctx.fillRect(px, py, tile, tile);
+        if ((x * 7 + y * 11) % 5 === 0) {
+          ctx.fillStyle = "#8bc5b8";
+          ctx.fillRect(px + 4, py + 5, 5, 2);
+        }
+      } else if (path(x, y)) {
+        ctx.fillStyle = (x + y) % 2 ? "#c7a86a" : "#d4b775";
+        ctx.fillRect(px, py, tile, tile);
+        if ((x * 3 + y) % 4 === 0) {
+          ctx.fillStyle = "#a88954";
+          ctx.fillRect(px + 10, py + 11, 2, 2);
+        }
+      } else {
+        ctx.fillStyle = (x * 13 + y * 7) % 6 === 0 ? "#4c8a55" : "#568f58";
+        ctx.fillRect(px, py, tile, tile);
+        if ((x * 5 + y * 3) % 7 === 0) {
+          ctx.fillStyle = "#79a95f";
+          ctx.fillRect(px + 3, py + 4, 2, 2);
+        }
+      }
+    }
+
+    function drawTree(x, y) {
+      const px = x * tile;
+      const py = y * tile;
+      ctx.fillStyle = "#694b38";
+      ctx.fillRect(px + 7, py + 9, 4, 7);
+      ctx.fillStyle = "#2c603f";
+      ctx.fillRect(px + 2, py + 3, 12, 8);
+      ctx.fillRect(px + 4, py, 8, 12);
+      ctx.fillStyle = "#39764a";
+      ctx.fillRect(px + 5, py + 2, 4, 3);
+    }
+
+    function draw() {
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < columns; x++) drawTile(x, y);
+      }
+
+      for (const [x, y] of [[4, 4], [10, 3], [21, 5], [6, 13], [26, 14]]) {
+        drawTree(x, y);
+      }
+
+      for (const [x, y, color] of [
+        [2, 6, "#f5d276"], [8, 16, "#e8a5a0"], [17, 4, "#f5d276"],
+        [18, 14, "#e8a5a0"], [28, 8, "#f5d276"], [3, 15, "#e8a5a0"]
+      ]) {
+        ctx.fillStyle = "#397348";
+        ctx.fillRect(x * tile + 7, y * tile + 9, 2, 5);
+        ctx.fillStyle = color;
+        ctx.fillRect(x * tile + 5, y * tile + 5, 6, 5);
+        ctx.fillStyle = "#f4e4a0";
+        ctx.fillRect(x * tile + 7, y * tile + 6, 2, 2);
+      }
+
+      const px = player.x * tile;
+      const py = player.y * tile;
+      ctx.fillStyle = "#283b39";
+      ctx.fillRect(px + 3, py + 13, 10, 2);
+      ctx.fillStyle = "#e7ae78";
+      ctx.fillRect(px + 4, py + 2, 8, 7);
+      ctx.fillStyle = "#4a4b70";
+      ctx.fillRect(px + 3, py + 8, 10, 6);
+      ctx.fillStyle = "#513a35";
+      ctx.fillRect(px + 3, py + 1, 10, 3);
+      ctx.fillStyle = "#273b38";
+      ctx.fillRect(px + 9, py + 5, 1, 1);
+    }
+
+    function move(dx, dy) {
+      const x = player.x + dx;
+      const y = player.y + dy;
+      if (x < 0 || y < 0 || x >= columns || y >= rows) return;
+      if (water(x, y) || blocked.has(`${x},${y}`)) {
+        document.querySelector("#message").textContent = water(x, y)
+          ? "The pond is peaceful, but too deep to cross."
+          : "A tree blocks the way.";
+        return;
+      }
+      player.x = x;
+      player.y = y;
+      document.querySelector("#message").textContent = "Explore with the arrow keys or WASD.";
+      draw();
+    }
+
+    window.addEventListener("keydown", event => {
+      const direction = directions[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      move(...direction);
+    });
+
+    document.querySelectorAll("[data-dir]").forEach(button => {
+      button.addEventListener("click", () => {
+        const direction = {
+          up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0]
+        }[button.dataset.dir];
+        move(...direction);
+      });
+    });
+
+    draw();
+  </script>
+</body>
+</html>
