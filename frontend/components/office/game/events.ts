@@ -36,6 +36,9 @@ export class GameBus {
     this.onAnchor = fn;
   }
 
+  /** Set by the scene: where the player stands (feet, world pixels; the spot in front of a seat while seated). */
+  positionOf: (() => { x: number; y: number } | null) | null = null;
+
   on<K extends keyof GameEvents>(type: K, fn: Handler<GameEvents[K]>) {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)!.add(fn as Handler<never>);

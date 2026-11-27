@@ -37,7 +37,7 @@ export function seatInteraction(seat: Seat): Interaction {
   if (seat.kind === "invited") {
     return { action: "flavor", prompt: `${seat.name}’s desk`, flavor: `Saved for ${seat.name}. They’ll sit here once they accept the invitation.` };
   }
-  return { action: "flavor", prompt: `Open desk ${seat.desk}`, flavor: "Nobody sits here yet. The next teammate to join gets this desk." };
+  return { action: "claim-desk", prompt: `Take open desk ${seat.desk}`, desk: seat.desk };
 }
 
 const STAR: Frame = ["..k..", ".kkk.", "kkkkk", ".kkk.", ".k.k."];

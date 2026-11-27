@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Hand, MapPin, Settings2, Volume2, VolumeX } from "lucide-react";
+import { Hand, MapPin, Settings2, Users, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import type { Ref } from "react";
 import { PixelImage, PixelSprite } from "@/components/pixel/PixelArt";
@@ -22,7 +22,7 @@ const chip = "border-2 border-ink bg-paper-light/95 shadow-pixel-sm";
 
 /** The viewer's role in this office. */
 export function officeBadge(c: OfficeConfig) {
-  return c.role === "owner" ? "Owner" : "Member";
+  return c.role === "owner" ? "Owner" : c.role === "admin" ? "Admin" : "Member";
 }
 
 export function Hud({
@@ -36,6 +36,8 @@ export function Hud({
   onInteract,
   onSound,
   onSettings,
+  onMembers,
+  swapsWaiting = 0,
 }: {
   config: OfficeConfig;
   /** Map size in tiles, for the minimap frame. */
@@ -48,6 +50,9 @@ export function Hud({
   onInteract: () => void;
   onSound: () => void;
   onSettings: () => void;
+  onMembers: () => void;
+  /** Desk swap requests waiting for the viewer's answer, shown as a badge on the members button. */
+  swapsWaiting?: number;
 }) {
   const avatar = avatarById(config.avatarId);
   const mapW = Math.round(mapSize.width * TILE * MINIMAP.scale);
@@ -91,6 +96,24 @@ export function Hud({
           className={`pointer-events-auto grid size-10 place-items-center ${chip} hover:bg-sun`}
         >
           {settings.sound ? <Volume2 className="size-5" aria-hidden /> : <VolumeX className="size-5" aria-hidden />}
+        </button>
+        <button
+          type="button"
+          onClick={onMembers}
+          aria-label={swapsWaiting ? `Members, ${swapCount(swapsWaiting)} waiting` : "Members"}
+          title={swapsWaiting ? `Members — ${swapCount(swapsWaiting)} waiting for you` : "Members"}
+          className={`pointer-events-auto relative grid size-10 place-items-center ${chip} hover:bg-sun`}
+        >
+          <Users className="size-5" aria-hidden />
+          {swapsWaiting > 0 && (
+            <span
+              aria-hidden
+              data-testid="swap-badge"
+              className="absolute -right-2 -top-2 grid h-5 min-w-5 place-items-center border-2 border-ink bg-terracotta px-0.5 font-pixel text-[0.55rem] leading-none text-ink"
+            >
+              {swapsWaiting > 9 ? "9+" : swapsWaiting}
+            </span>
+          )}
         </button>
         <button
           type="button"
@@ -148,6 +171,8 @@ export function Hud({
     </div>
   );
 }
+
+const swapCount = (n: number) => `${n} desk swap request${n === 1 ? "" : "s"}`;
 
 const STATUS_SHORT: Record<Status, string> = { available: "Available", focusing: "Focus", break: "Break" };
 const STATUS_HINT: Record<Status, string> = {

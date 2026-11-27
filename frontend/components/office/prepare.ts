@@ -49,6 +49,8 @@ function fromServer(s: SavedOffice): { config: OfficeConfig; map: OfficeMap } {
       seats: Array.isArray(s.seats) ? s.seats : undefined,
       status: s.me?.status,
       preferences: s.preferences,
+      position: s.me?.position ?? null,
+      officeSavedAt: s.savedAt,
     },
   };
 }

@@ -15,5 +15,5 @@
       "@/*": ["../frontend/*"]
     }
   },
-  "include": ["app.ts", "src/**/*.ts"]
+  "include": ["app.ts", "src/**/*.ts", "test/**/*.ts"]
 }

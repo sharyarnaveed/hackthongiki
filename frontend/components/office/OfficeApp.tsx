@@ -2,18 +2,21 @@
 
 import { AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import { MotionProvider } from "@/components/motion/Motion";
 import { OfficeAudio } from "./audio";
 import { createGame } from "./game/createGame";
 import { GameBus, type GameEvents } from "./game/events";
 import { seatFor } from "./game/seating";
 import { Hud, PlayerAnchor, Toast, type Settings, type Status } from "./hud";
-import { OfficePanel, type PanelId } from "./panels";
+import { OfficePanel, type OfficeActions, type PanelId } from "./panels";
 import type { LayoutId } from "@/components/onboarding/model";
 import { NoWorkspaceError, prepareOffice, resetPreparedOffice, type PreparedOffice } from "./prepare";
-import { changeOfficePlan, savePreferences, saveStatus } from "./service";
+import { changeOffice, savePosition, savePreferences, saveStatus, type OfficeChange } from "./service";
+import { saveProfile, takeDesk } from "@/components/team/service";
+import { ApiError } from "@/lib/api";
 import { LoadingCard } from "./LoadingScreen";
+import { useSwapRequests } from "./useSwapRequests";
 
 /**
  * The `/office` surface: a full-screen Phaser world with a light React HUD on
@@ -42,22 +45,47 @@ export function OfficeApp() {
   }, [attempt, router]);
 
   const config = prepared?.config;
-  const changePlan = useCallback(
-    async (layout: LayoutId, teamSize: string) => {
-      // Only the owner changes the plan; the server regenerates the office and saves it for everyone.
+  /** Saves the avatar's spot right now; set by the World while the game runs. */
+  const flushPosition = useRef<() => Promise<void>>(async () => {});
+
+  /** Fetch the office again (the old one stays on screen until the new one is ready). */
+  const reload = useCallback(async (keepSpot: boolean) => {
+    if (keepSpot) await flushPosition.current();
+    resetPreparedOffice();
+    setAttempt((n) => n + 1);
+  }, []);
+
+  /** Owner: the server regenerates the office and saves it for everyone. Throws so forms can show the error. */
+  const rebuild = useCallback(
+    async (change: OfficeChange) => {
       if (!config?.workspaceId || config.role !== "owner") return;
-      try {
-        await changeOfficePlan(config.workspaceId, layout, teamSize);
-      } catch (err) {
-        console.error("[office] couldn't save the new plan", err);
-        setError(true);
-        setPrepared(null);
-        return;
-      }
-      resetPreparedOffice();
-      setAttempt((n) => n + 1);
+      await changeOffice(config.workspaceId, change);
+      await reload(false);
     },
-    [config],
+    [config, reload],
+  );
+
+  const actions = useMemo<OfficeActions>(
+    () => ({
+      onPlan: (officeLayout: LayoutId, teamSize: string) =>
+        rebuild({ officeLayout, teamSize }).catch((err) => {
+          console.error("[office] couldn't save the new plan", err);
+          setError(true);
+          setPrepared(null);
+        }),
+      onLook: (change) => rebuild(change),
+      onProfile: async (patch) => {
+        if (!config?.workspaceId) return;
+        await saveProfile(config.workspaceId, patch);
+        await reload(true);
+      },
+      // Desks, roles, members and invitations all show up in the office: load it again.
+      onTeam: (what) => {
+        // Invite codes and swap requests don't change the office itself.
+        if (what !== "invite" && what !== "swap-requests") reload(true);
+      },
+    }),
+    [config, rebuild, reload],
   );
 
   if (!prepared) {
@@ -76,12 +104,22 @@ export function OfficeApp() {
   }
   return (
     <MotionProvider>
-      <World prepared={prepared} onPlan={changePlan} />
+      <World prepared={prepared} actions={actions} reload={reload} flushRef={flushPosition} />
     </MotionProvider>
   );
 }
 
-function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout: LayoutId, teamSize: string) => void }) {
+function World({
+  prepared,
+  actions,
+  reload,
+  flushRef,
+}: {
+  prepared: PreparedOffice;
+  actions: OfficeActions;
+  reload: (keepSpot: boolean) => Promise<void>;
+  flushRef: MutableRefObject<() => Promise<void>>;
+}) {
   const { config } = prepared;
   const seats = useMemo(
     () =>
@@ -153,6 +191,36 @@ function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout
     return off;
   }, [savedPrefs?.sound, setSound]);
 
+  // Remember where the avatar stands: every 15 s if it moved, when the tab is hidden or closed, and
+  // before the office reloads. Declared before the game effect so its cleanup runs while the game still exists.
+  useEffect(() => {
+    if (!workspaceId || !ready) return;
+    const officeSavedAt = config.officeSavedAt;
+    let last = config.position ?? null;
+    let seen: { x: number; y: number } | null = null;
+    const save = (keepalive = false) => {
+      const p = bus.positionOf?.() ?? seen;
+      if (!p || (last && Math.hypot(p.x - last.x, p.y - last.y) < 8)) return Promise.resolve();
+      last = p;
+      return savePosition(workspaceId, p, officeSavedAt, keepalive).then(() => {});
+    };
+    const sample = setInterval(() => (seen = bus.positionOf?.() ?? seen), 2000);
+    const timer = setInterval(() => save(), 15000);
+    const onHidden = () => document.visibilityState === "hidden" && save(true);
+    const onLeave = () => save(true);
+    document.addEventListener("visibilitychange", onHidden);
+    window.addEventListener("pagehide", onLeave);
+    flushRef.current = () => save();
+    return () => {
+      clearInterval(sample);
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onHidden);
+      window.removeEventListener("pagehide", onLeave);
+      flushRef.current = async () => {};
+      save(true);
+    };
+  }, [ready, workspaceId, bus, config, flushRef]);
+
   // Mount exactly one Phaser game for this component; tear it down on unmount.
   useEffect(() => {
     const el = host.current;
@@ -184,6 +252,34 @@ function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout
 
   useEffect(() => () => audio.dispose(), [audio]);
 
+  // With `cacheComponents`, Next keeps this page's state when you go to the dashboard and come back.
+  // Close panels and toasts when the office is hidden, so it reopens clean instead of on Settings.
+  useEffect(
+    () => () => {
+      setPanel(null);
+      setToast(null);
+      // The audio was disposed above; show music as off until it's turned on again.
+      soundOn.current = false;
+      setSettings((s) => ({ ...s, sound: false }));
+    },
+    [],
+  );
+
+  // Swap requests waiting for you: a badge on the members button, and a toast when a new one arrives.
+  const { waiting: swapsWaiting, refresh: refreshSwaps } = useSwapRequests(workspaceId, (fresh) =>
+    say(
+      fresh.length === 1
+        ? `${fresh[0].from.displayName} asked to swap desks with you. Open Members to answer.`
+        : `${fresh.length} desk swap requests are waiting. Open Members to answer.`,
+    ),
+  );
+  // Answering in the members panel changes the list: check again once it closes.
+  const wasMembers = useRef(false);
+  useEffect(() => {
+    if (wasMembers.current && panel !== "members") refreshSwaps();
+    wasMembers.current = panel === "members";
+  }, [panel, refreshSwaps]);
+
   // Interactions coming from the world.
   useEffect(
     () =>
@@ -210,9 +306,19 @@ function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout
           }
           case "flavor":
             return say(interaction.flavor ?? "");
+          case "claim-desk": {
+            const desk = interaction.desk;
+            if (!workspaceId || !desk) return;
+            return takeDesk(workspaceId, desk)
+              .then(() => {
+                say(`Desk ${desk} is yours now.`);
+                reload(true);
+              })
+              .catch((err) => say(err instanceof ApiError ? err.message : "Couldn’t take that desk. Try again."));
+          }
         }
       }),
-    [bus, audio, say, toggleSound],
+    [bus, audio, say, toggleSound, workspaceId, reload],
   );
 
   // Status: the game sits you at your desk for Focus and gets you up for Available.
@@ -284,6 +390,8 @@ function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout
         onInteract={() => bus.emit("request-interact")}
         onSound={() => toggleSound(!settings.sound)}
         onSettings={() => setPanel("settings")}
+        onMembers={() => setPanel("members")}
+        swapsWaiting={swapsWaiting.length}
       />
       <AnimatePresence>{toast && <Toast key={toast.id} text={toast.text} />}</AnimatePresence>
       <AnimatePresence>
@@ -296,7 +404,7 @@ function World({ prepared, onPlan }: { prepared: PreparedOffice; onPlan: (layout
             status={status}
             onStatus={changeStatus}
             settings={settings}
-            onPlan={onPlan}
+            actions={actions}
             onSettings={(patch) => {
               if (patch.sound !== undefined) setSound(patch.sound);
               setSettings((s) => ({ ...s, ...patch, sound: patch.sound ?? s.sound }));

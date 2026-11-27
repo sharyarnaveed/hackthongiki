@@ -62,6 +62,11 @@ export class PlayerController {
     return this.seat !== null;
   }
 
+  /** Where to stand on the next visit: here, or in front of the seat while sitting. */
+  get restPoint() {
+    return this.seat ? { ...this.seat.stand } : { x: this.sprite.x, y: this.sprite.y };
+  }
+
   /**
    * Sit with the feet at (x, y). `typing` plays the desk animation; otherwise
    * a still seated pose. The physics body is switched off while seated.

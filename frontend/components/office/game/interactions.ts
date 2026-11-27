@@ -2,12 +2,14 @@
  * What each interactive object does. A few open React panels; the rest show a
  * short line of flavour text.
  */
-export type InteractionAction = "desk" | "workspace" | "coffee" | "meeting" | "break" | "music" | "flavor";
+export type InteractionAction = "desk" | "workspace" | "coffee" | "meeting" | "break" | "music" | "flavor" | "claim-desk";
 
 export interface Interaction {
   action: InteractionAction;
   prompt: string;
   flavor?: string;
+  /** For "claim-desk": the desk number (from 1). */
+  desk?: number;
 }
 
 export const INTERACTIONS = {

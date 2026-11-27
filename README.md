@@ -17,10 +17,18 @@ cd backend
 npm install
 npm run dev
 
+# backend tests (uses MONGODB from .env, cleans up after itself)
+cd backend
+npm test
+
 # frontend (http://localhost:3000)
 cd frontend
 npm install
 npm run dev
+
+# frontend tests (Vitest + Testing Library, no server needed)
+cd frontend
+npm test
 ```
 
 `backend/.env`:
@@ -33,6 +41,8 @@ npm run dev
 | `CLIENT_URL` | Frontend URL used in email links |
 | `CLIENT_ORIGIN` | Allowed CORS origins, comma-separated (default: any localhost port) |
 | `PORT` | API port (default `4000`) |
+| `LOG_LEVEL` | Log level (default `info`; `debug`, `warn`, `silent`…) |
+| `LOG_REQUESTS` | `off` hides the one-line access log for each request |
 
 The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 
@@ -78,6 +88,21 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] List of your workspaces
 - [x] Owner: rename or edit the description, delete the workspace
 - [x] Member: leave the workspace
+- [x] **Members** dialog on each card (the same team panel as in the office)
+
+### Team & members
+- [x] Roles: **owner** (everything), **admin** (invite code, invitations, desks, removing members), **member**
+- [x] Members panel in the office (👥 button) and on the dashboard: avatar, role, desk, status, last seen
+- [x] Settings screen in the office to change your name tag and avatar
+- [x] Owner/admin: show and copy the invitation code, make a new one (the old one stops working), turn it off/on, set an expiry (never, 1, 7 or 30 days)
+- [x] Owner/admin: invite more people after onboarding (existing members and pending invites are skipped), resend (1-minute cooldown) or cancel invitations
+- [x] Owner: make someone admin or member, transfer ownership (the old owner becomes an admin); owner/admin: remove members (admins can only remove plain members)
+- [x] Owner: change the office style and furniture after creation (the office is rebuilt and saved for everyone)
+- [x] Members choose a desk: walk up to an open desk and press E, or pick one in the members panel; owners/admins can move anyone and swap two people's desks (safe against two people grabbing the same desk at once)
+- [x] **Desk swap requests**: members ask a teammate for their desk from the members panel; the teammate accepts (desks are swapped atomically) or declines, and the asker can cancel. One open request per pair, at most 3 waiting per person. A request is dropped if either person moves or leaves, or the office is rebuilt
+- [x] **Emails** to members who are removed and to the new owner after a transfer (a failed email is logged and never undoes the change)
+- [x] The player's last position is saved (every 15 s when moved, when the tab is hidden or closed) and you start there next time; positions reset when the office is rebuilt
+- [x] The office reopens clean (no panel left open) when you come back from the dashboard
 
 ### No mock data
 - [x] Removed the demo office, guest user and the `/office-preview` page
@@ -88,8 +113,19 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 
 ### Server logs
 - [x] Readable, colored logs in development (pino-pretty), JSON in production
+- [x] One access line per request: method, path, status, time and user (`LOG_REQUESTS=off` to hide); 4xx/slow requests as warnings, 5xx as errors
+- [x] MongoDB connect / disconnect / reconnect, startup summary and clean shutdown on Ctrl+C
+- [x] Every new action is logged: invite code viewed/regenerated/revoked, invitations added/sent/resent/cancelled, roles, transfers, removals, desk moves and swaps, saved positions, office rebuilds (with what changed)
 - [x] One log line for each write: sign-up, sign-in, workspace saved, office generated or served, plan changed, member joined, desks assigned, status, settings, profile, waitlist
 - [x] Failed and rejected requests logged with the reason (request bodies hidden for auth routes)
+
+### Tests
+- [x] `npm test` in `backend/` runs 28 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
+- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting
+- [x] Emails are kept in memory during tests (`MAIL_TRANSPORT=memory`), nothing is really sent
+- [x] Uses the same database as the app, but only creates records tagged with a run id (`…@thespace.test`) and deletes exactly those afterwards
+- [x] `npm test` in `frontend/` runs 66 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, and the dashboard dialogs (edit, delete/leave, members)
+- [x] The 👥 button in the office shows a badge with desk swap requests waiting for you (checked every 30 s and when you come back to the tab), and a toast when a new one arrives
 
 ---
 
@@ -109,10 +145,26 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 | PATCH | `/api/workspaces/:id` | Owner: rename or edit the description |
 | DELETE | `/api/workspaces/:id` | Owner: delete · Member: leave |
 | GET | `/api/workspaces/:id/office` | The saved office, your desk and status, and who sits where |
-| PUT | `/api/workspaces/:id/office/plan` | Owner: change floor plan and team size |
-| GET | `/api/workspaces/:id/members` | Members with their desk and status (owner also sees invitations) |
+| PUT | `/api/workspaces/:id/office/plan` | Owner: change floor plan, team size, style and/or furniture |
+| GET | `/api/workspaces/:id/members` | Members with their desk and status, your desk swap requests (owner/admin also see invitations) |
 | PATCH | `/api/workspaces/:id/me` | Change your name tag or avatar |
 | PATCH | `/api/workspaces/:id/me/status` | Save your status |
+| PUT | `/api/workspaces/:id/me/desk` | Take an open desk (owner/admin: swap with whoever sits there) |
+| PUT | `/api/workspaces/:id/me/position` | Save where your avatar stands |
+| GET | `/api/workspaces/:id/desk-requests` | Your desk swap requests (sent and waiting for you) |
+| POST | `/api/workspaces/:id/desk-requests` | Ask a member (`memberId`) to swap desks |
+| POST | `/api/workspaces/:id/desk-requests/:requestId/accept` | Accept a request sent to you (swaps the desks) |
+| DELETE | `/api/workspaces/:id/desk-requests/:requestId` | Decline a request sent to you, or cancel yours |
+| GET | `/api/workspaces/:id/invite` | Owner/admin: the invite code, expiry and whether it works |
+| POST | `/api/workspaces/:id/invite/regenerate` | Owner/admin: new code, optional `expiresInDays` |
+| PATCH | `/api/workspaces/:id/invite` | Owner/admin: `revoked` and/or `expiresInDays` (1–90 or null) |
+| POST | `/api/workspaces/:id/invitations` | Owner/admin: invite more emails |
+| POST | `/api/workspaces/:id/invitations/resend` | Owner/admin: send an invitation again |
+| DELETE | `/api/workspaces/:id/invitations/:email` | Owner/admin: cancel an invitation |
+| PATCH | `/api/workspaces/:id/members/:memberId` | Owner: set role (`admin` / `member`) |
+| DELETE | `/api/workspaces/:id/members/:memberId` | Owner/admin: remove a member (they get an email) |
+| PUT | `/api/workspaces/:id/members/:memberId/desk` | Owner/admin: move someone to a desk (swaps if taken) |
+| POST | `/api/workspaces/:id/transfer` | Owner: hand the workspace to another member (they get an email) |
 | GET | `/api/workspaces/invitations/:code` | Check an invitation code |
 | POST | `/api/workspaces/join` | Join with an invitation code |
 | POST | `/api/waitlist` | Early-access sign-up |
@@ -123,14 +175,8 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 ## Future plan
 
 ### Next up
-- [ ] Settings screen to change your name tag and avatar (the route already exists)
-- [ ] Members panel in the office and dashboard (uses `GET /:id/members`)
-- [ ] Owner: show, regenerate or revoke the invitation code and set an expiry
-- [ ] Owner: invite more people after onboarding, resend or cancel invitations
-- [ ] Owner: remove a member, change roles, transfer ownership
-- [ ] Owner: change style and furniture after creation
-- [ ] Let members choose or swap desks
-- [ ] Save the player's last position in the office
+- [x] Show waiting desk swap requests in the office (a badge on 👥) without opening the members panel
+- [x] Frontend tests for the rest of the office HUD and the dashboard dialogs
 
 ### Account
 - [ ] Forgot / reset password
@@ -152,5 +198,6 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 
 ### Production
 - [ ] Shared rate limiter (Redis) instead of in-memory
-- [ ] Tests for routes and the office generator
+- [ ] Tests for the office generator (API routes are covered by `npm test`)
+- [ ] An in-memory MongoDB for tests, so they don't need the cluster
 - [ ] Deployment (frontend + API + MongoDB Atlas), HTTPS cookies

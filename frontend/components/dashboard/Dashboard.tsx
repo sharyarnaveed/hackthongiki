@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, Crown, DoorOpen, LogOut, Pencil, Plus, RefreshCw, Trash2, Users } from "lucide-react";
+import { ArrowRight, Crown, DoorOpen, LogOut, Pencil, Plus, RefreshCw, Shield, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -14,7 +14,8 @@ import { forgetWorkspace, openWorkspace, storedWorkspaceId } from "@/components/
 import { resetPreparedOffice } from "@/components/office/prepare";
 import { PixelSprite } from "@/components/pixel/PixelArt";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
-import { DeleteWorkspaceDialog, EditWorkspaceDialog } from "./WorkspaceDialogs";
+import { DeleteWorkspaceDialog, EditWorkspaceDialog, MembersDialog } from "./WorkspaceDialogs";
+import { ROLE_LABEL, type Role } from "@/components/team/service";
 
 type Me = { id: string; fullName: string; email: string };
 
@@ -28,7 +29,7 @@ export type WorkspaceSummary = {
   workspaceStyle: string;
   officeLayout: string;
   officeFeatures: string[];
-  role: "owner" | "member";
+  role: Role;
   displayName: string;
   avatarId: string;
 };
@@ -53,6 +54,9 @@ export function Dashboard() {
   const [signingOut, setSigningOut] = useState(false);
   const [editing, setEditing] = useState<WorkspaceSummary | null>(null);
   const [removing, setRemoving] = useState<WorkspaceSummary | null>(null);
+  const [team, setTeam] = useState<WorkspaceSummary | null>(null);
+  // Something changed in the members dialog (roles, members): refresh the cards when it closes.
+  const [teamChanged, setTeamChanged] = useState(false);
 
   const replace = (updated: WorkspaceSummary) =>
     setState((s) => (s.status === "ready" ? { ...s, workspaces: s.workspaces.map((w) => (w.workspaceId === updated.workspaceId ? updated : w)) } : s));
@@ -210,6 +214,7 @@ export function Dashboard() {
                       onOpen={() => open(ws.workspaceId)}
                       onEdit={() => setEditing(ws)}
                       onRemove={() => setRemoving(ws)}
+                      onMembers={() => setTeam(ws)}
                     />
                   ))}
                   <li>
@@ -240,6 +245,20 @@ export function Dashboard() {
           }}
         />
       )}
+      {team && (
+        <MembersDialog
+          ws={team}
+          onChanged={() => {
+            setTeamChanged(true);
+            resetPreparedOffice();
+          }}
+          onClose={() => {
+            setTeam(null);
+            if (teamChanged) load();
+            setTeamChanged(false);
+          }}
+        />
+      )}
       {removing && (
         <DeleteWorkspaceDialog
           ws={removing}
@@ -260,12 +279,14 @@ function WorkspaceCard({
   onOpen,
   onEdit,
   onRemove,
+  onMembers,
 }: {
   ws: WorkspaceSummary;
   index: number;
   onOpen: () => void;
   onEdit: () => void;
   onRemove: () => void;
+  onMembers: () => void;
 }) {
   const owner = ws.role === "owner";
   const avatar = avatarById(ws.avatarId);
@@ -291,13 +312,18 @@ function WorkspaceCard({
         <p className="line-clamp-2 min-h-10 text-sm text-ink/80">{ws.description || labelOf(STYLES, ws.workspaceStyle)}</p>
         <div className="flex flex-wrap gap-2 text-xs font-semibold">
           <span className="inline-flex items-center gap-1 border-2 border-ink bg-paper-light px-2 py-0.5">
-            {ws.role === "owner" ? <Crown className="size-3" aria-hidden /> : null}
-            {ws.role === "owner" ? "Owner" : "Member"}
+            {ws.role === "owner" ? <Crown className="size-3" aria-hidden /> : ws.role === "admin" ? <Shield className="size-3" aria-hidden /> : null}
+            {ROLE_LABEL[ws.role] ?? "Member"}
           </span>
-          <span className="inline-flex items-center gap-1 border-2 border-ink bg-paper-light px-2 py-0.5">
+          <button
+            type="button"
+            onClick={onMembers}
+            aria-label={`Members of ${ws.name}`}
+            className="inline-flex items-center gap-1 border-2 border-ink bg-paper-light px-2 py-0.5 hover:bg-sun"
+          >
             <Users className="size-3" aria-hidden />
-            {ws.memberCount}
-          </span>
+            {ws.memberCount} · Members
+          </button>
           <span className="border-2 border-ink bg-paper-light px-2 py-0.5">{labelOf(PURPOSES, ws.purpose)}</span>
         </div>
         <div className="mt-auto flex gap-2">

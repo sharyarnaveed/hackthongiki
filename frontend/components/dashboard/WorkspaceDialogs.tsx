@@ -6,9 +6,10 @@ import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ErrorText, Field } from "@/components/auth/fields";
 import { LIMITS } from "@/components/onboarding/model";
 import { ApiError, apiDelete, apiPatch } from "@/lib/api";
+import { TeamPanel } from "@/components/team/TeamPanel";
 import type { WorkspaceSummary } from "./Dashboard";
 
-function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Dialog({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -23,7 +24,7 @@ function Dialog({ title, onClose, children }: { title: string; onClose: () => vo
         aria-labelledby="ws-dialog-title"
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md border-2 border-ink bg-paper-light shadow-[8px_8px_0_0_var(--color-ink)]"
+        className={`w-full ${wide ? "max-w-xl" : "max-w-md"} border-2 border-ink bg-paper-light shadow-[8px_8px_0_0_var(--color-ink)]`}
       >
         <div className="flex items-center justify-between border-b-2 border-ink bg-paper px-5 py-3">
           <h2 id="ws-dialog-title" className="text-lg font-semibold text-ink">
@@ -33,7 +34,7 @@ function Dialog({ title, onClose, children }: { title: string; onClose: () => vo
             <X className="size-4" aria-hidden />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="max-h-[75dvh] overflow-y-auto p-5">{children}</div>
       </motion.div>
     </div>
   );
@@ -181,6 +182,15 @@ export function DeleteWorkspaceDialog({ ws, onClose, onDone }: { ws: WorkspaceSu
           </button>
         </div>
       </div>
+    </Dialog>
+  );
+}
+
+/** Everyone in the workspace; owners and admins manage invitations, desks and roles here. */
+export function MembersDialog({ ws, onClose, onChanged }: { ws: WorkspaceSummary; onClose: () => void; onChanged: () => void }) {
+  return (
+    <Dialog title={`Members · ${ws.name}`} onClose={onClose} wide>
+      <TeamPanel workspaceId={ws.workspaceId} onChange={onChanged} />
     </Dialog>
   );
 }

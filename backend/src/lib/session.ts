@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { Types } from "mongoose";
 import type { FastifyReply, FastifyRequest, onRequestAsyncHookHandler } from "fastify";
 import { SessionModel } from "../models/Session.ts";
 import { UserModel } from "../models/User.ts";
@@ -29,7 +30,7 @@ const cookieBase = {
 };
 
 /** Start a session for `userId` and set the cookie on the reply. */
-export async function startSession(reply: FastifyReply, userId: unknown, remember = true) {
+export async function startSession(reply: FastifyReply, userId: Types.ObjectId | string, remember = true) {
   const token = randomBytes(32).toString("base64url");
   const ttl = remember ? REMEMBER_MS : SHORT_MS;
   await SessionModel.create({ tokenHash: hashToken(token), userId, expiresAt: new Date(Date.now() + ttl) });

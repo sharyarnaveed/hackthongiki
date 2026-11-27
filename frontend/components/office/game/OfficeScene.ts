@@ -77,7 +77,12 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
 
       // Player
       createAvatarAnims(this);
-      this.player = new PlayerController(this, map.spawn.tx * TILE, map.spawn.ty * TILE + TILE / 2);
+      // Start where you left off if that spot is still free floor; otherwise at the door.
+      const saved = prepared.config.position;
+      const free = (x: number, y: number) => x > 0 && y > 0 && x < worldW && y < worldH && !blocked.getTileAtWorldXY(x, y - 3) && !map.walls[Math.floor((y - 3) / TILE)]?.[Math.floor(x / TILE)];
+      const start = saved && free(saved.x, saved.y) ? saved : { x: map.spawn.tx * TILE, y: map.spawn.ty * TILE + TILE / 2 };
+      this.player = new PlayerController(this, start.x, start.y);
+      bus.positionOf = () => this.player.restPoint;
       this.physics.world.setBounds(0, 0, worldW, worldH);
       this.physics.add.collider(this.player.sprite, blocked);
 
@@ -116,6 +121,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       );
       // Destroying the game fires "destroy" (not "shutdown"), so unsubscribe on both.
       const teardown = () => {
+        if (bus.positionOf) bus.positionOf = null;
         this.cleanup.forEach((fn) => fn());
         this.cleanup = [];
       };

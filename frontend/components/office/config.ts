@@ -3,6 +3,7 @@ import { isFeatureId, type FeatureId } from "./features";
 import type { ServerSeat } from "./game/seating";
 import type { PlayerStatus } from "./game/events";
 import type { Preferences } from "./service";
+import type { Role } from "@/components/team/service";
 import {
   DEFAULT_LAYOUT,
   DEFAULT_STYLE,
@@ -37,11 +38,15 @@ export interface OfficeConfig {
   teammates: string[];
   /** Set once the office is loaded from the server. */
   workspaceId?: string;
-  role?: "owner" | "member";
+  role?: Role;
   /** Desks, status and settings as stored on the server. */
   seats?: ServerSeat[];
   status?: PlayerStatus;
   preferences?: Preferences;
+  /** Where the avatar stood last time (world pixels, feet), if saved for this version of the office. */
+  position?: { x: number; y: number } | null;
+  /** Version of the saved office, sent back with position saves. */
+  officeSavedAt?: string;
 }
 
 /** The workspace opened in this tab; its saved office is loaded from the server. */

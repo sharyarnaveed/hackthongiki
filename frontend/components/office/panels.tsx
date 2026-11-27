@@ -13,8 +13,10 @@ import { seatLabel, type Seat } from "./game/seating";
 const SEAT_DOT: Record<Seat["kind"], string> = { mine: "bg-sun", member: "bg-forest", invited: "bg-sage", open: "bg-paper-light" };
 import { PlanPicker } from "@/components/onboarding/PlanPicker";
 import { STATUS_DOT, STATUS_LABEL, officeBadge, type Settings, type Status } from "./hud";
+import { TeamPanel, type TeamChange } from "@/components/team/TeamPanel";
+import { LookForm, ProfileForm } from "./SettingsForms";
 
-export type PanelId = "desk" | "workspace" | "meeting" | "break" | "settings";
+export type PanelId = "desk" | "workspace" | "meeting" | "break" | "settings" | "members";
 
 const TITLES: Record<PanelId, string> = {
   desk: "Your desk",
@@ -22,6 +24,15 @@ const TITLES: Record<PanelId, string> = {
   meeting: "Meeting room",
   break: "Break time",
   settings: "Settings",
+  members: "Members",
+};
+
+/** What the settings and members panels can change; each returns once the office has reloaded. */
+export type OfficeActions = {
+  onPlan: (layout: LayoutId, teamSize: string) => void;
+  onLook: (change: { workspaceStyle?: string; officeFeatures?: string[] }) => Promise<void>;
+  onProfile: (patch: { displayName?: string; avatarId?: string }) => Promise<void>;
+  onTeam: (what: TeamChange) => void;
 };
 
 export function OfficePanel({
@@ -32,7 +43,7 @@ export function OfficePanel({
   onStatus,
   settings,
   onSettings,
-  onPlan,
+  actions,
   onClose,
 }: {
   id: PanelId;
@@ -43,7 +54,7 @@ export function OfficePanel({
   onStatus: (s: Status) => void;
   settings: Settings;
   onSettings: (patch: Partial<Settings>) => void;
-  onPlan: (layout: LayoutId, teamSize: string) => void;
+  actions: OfficeActions;
   onClose: () => void;
 }) {
   const close = useRef<HTMLButtonElement>(null);
@@ -54,7 +65,8 @@ export function OfficePanel({
   else if (id === "workspace") body = <Workspace config={config} seats={seats} />;
   else if (id === "meeting") body = <Meeting />;
   else if (id === "break") body = <Break />;
-  else body = <SettingsBody config={config} settings={settings} onSettings={onSettings} onPlan={onPlan} />;
+  else if (id === "members") body = config.workspaceId ? <TeamPanel workspaceId={config.workspaceId} onChange={actions.onTeam} /> : null;
+  else body = <SettingsBody config={config} settings={settings} onSettings={onSettings} actions={actions} />;
 
   return (
     <motion.div
@@ -127,7 +139,7 @@ function Desk({ config, status, onStatus }: { config: OfficeConfig; status: Stat
       </fieldset>
       <Note>
         Pick <strong>Focusing</strong> to sit down and work — move to get up again. You can also change your status any time
-        from the top-left, without walking here. Nothing is saved or shared.
+        from the top-left, without walking here. Your status is saved, and you can pick another desk from the Members panel.
       </Note>
     </>
   );
@@ -207,13 +219,14 @@ function SettingsBody({
   config,
   settings,
   onSettings,
-  onPlan,
+  actions,
 }: {
   config: OfficeConfig;
   settings: Settings;
   onSettings: (patch: Partial<Settings>) => void;
-  onPlan: (layout: LayoutId, teamSize: string) => void;
+  actions: OfficeActions;
 }) {
+  const { onPlan } = actions;
   const toggles: [keyof Settings, string, string][] = [
     ["sound", "Music", "Soft synthesised tunes, made in your browser."],
     ["minimap", "Minimap", "Whole-office overview in the corner."],
@@ -230,8 +243,10 @@ function SettingsBody({
           onTeamSize={(teamSize) => onPlan(config.layout, teamSize)}
         />
       ) : (
-        <Note>Only the workspace owner can change the floor plan.</Note>
+        <Note>Only the workspace owner can change the floor plan, style and furniture.</Note>
       )}
+      {config.role === "owner" && <LookForm key={`${config.workspaceStyle}|${config.features?.join()}`} config={config} onSave={actions.onLook} />}
+      <ProfileForm key={`${config.displayName}|${config.avatarId}`} config={config} onSave={actions.onProfile} />
       <ul className="flex flex-col gap-2">
         {toggles.map(([key, label, hint]) => (
           <li key={key}>
