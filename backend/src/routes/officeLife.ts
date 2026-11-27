@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { catalog } from "@/components/office/game/furniture";
 import { applyMoves, blocksTheWay, groupOf, kindLabel, placementProblem, type FurnitureMeta, type FurnitureMove, type LayoutFloor } from "@/components/office/game/layoutEdit";
 import type { OfficeMap } from "@/components/office/game/map";
+import { live } from "../live/hub.ts";
 import { STAT_ACTIONS, statsView, takeTurn, type StatAction } from "../lib/stats.ts";
 import { NOT_FOUND, memberWorkspace, mid } from "../lib/workspace.ts";
 import { NOTE_COLORS, NoticeModel, type NoteColor } from "../models/Notice.ts";
@@ -257,6 +258,7 @@ export const officeLifeRoutes: FastifyPluginAsync = async (app) => {
         { id: ws.id, by: me.displayName, moved: moves.map((m) => `${m.kind} ${m.from.tx},${m.from.ty} → ${m.to.tx},${m.to.ty}`), version: version + 1 },
         "🛋️  Furniture moved — layout saved to MongoDB",
       );
+      live.officeChanged(ws.id, office as never, { id: mid(me), name: me.displayName });
       return reply.send({ moved: moves.length, layoutVersion: version + 1 });
     },
   );

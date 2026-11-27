@@ -1,3 +1,4 @@
+import { live } from "../live/hub.ts";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { sendInvitationEmail, sendOwnershipEmail, sendRemovedEmail } from "../lib/mailer.ts";
 import { EMAIL_RE, LIMITS, formatCode, newInviteCode, rateLimiter } from "../lib/onboarding.ts";
@@ -290,6 +291,7 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ message: target.role === "owner" ? "The owner can't be removed." : "Only the owner can remove an admin." });
     }
     await WorkspaceModel.updateOne({ _id: ws._id }, { $pull: { members: { _id: target._id } } });
+    live.kick(ws.id, mid(target), "You were removed from the workspace");
     req.log.info(
       { id: ws.id, by: req.user!.email, removed: target.displayName, role: target.role, freedDesk: typeof target.desk === "number" ? target.desk + 1 : "none" },
       "👢 Member removed — saved to MongoDB",

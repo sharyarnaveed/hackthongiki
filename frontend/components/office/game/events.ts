@@ -1,5 +1,6 @@
 import type { Interaction, InteractionId } from "./interactions";
 import type { FurnitureMove } from "./layoutEdit";
+import type { PeerView, Pose } from "../live/protocol";
 
 /**
  * Typed bridge between the Phaser scene and the React HUD. Neither side
@@ -27,6 +28,10 @@ export interface GameEvents {
   "set-arrange": boolean;
   /** The moved layout was saved: leave arrange mode as it is while the new office loads. */
   "arrange-saved": void;
+  /** Live office: a teammate appeared or changed avatar, moved, or left. */
+  "peer-upsert": PeerView;
+  "peer-move": Pose & { id: string };
+  "peer-leave": string;
 }
 
 export type ArrangeState = { moved: number; holding: string | null; problem: string | null };
@@ -47,6 +52,12 @@ export class GameBus {
 
   /** Set by the scene: where the player stands (feet, world pixels; the spot in front of a seat while seated). */
   positionOf: (() => { x: number; y: number } | null) | null = null;
+
+  /** Set by the scene: how the player is drawn right now and the room they're in, sent to teammates. */
+  poseOf: (() => Pose & { room: string }) | null = null;
+
+  /** Called every frame with each teammate's head position in canvas pixels (for their name tags). */
+  onPeerAnchor: ((id: string, x: number, y: number) => void) | null = null;
 
   /** Set by the scene: the furniture moved so far in arrange mode. */
   arrangeMoves: (() => FurnitureMove[]) | null = null;

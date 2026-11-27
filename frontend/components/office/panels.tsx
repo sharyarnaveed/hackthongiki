@@ -43,9 +43,13 @@ export type OfficeActions = {
   onOpen: (id: PanelId) => void;
 };
 
+/** The meeting room / call booth panel: which room you're in and who's already on its call. */
+export type MeetingInfo = { room: string; canCall: boolean; inCall: string[]; full: boolean; onJoin: () => void };
+
 export function OfficePanel({
   id,
   seats,
+  meeting,
   config,
   status,
   onStatus,
@@ -64,6 +68,7 @@ export function OfficePanel({
   onSettings: (patch: Partial<Settings>) => void;
   actions: OfficeActions;
   onClose: () => void;
+  meeting?: MeetingInfo;
 }) {
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
@@ -73,7 +78,7 @@ export function OfficePanel({
   else if (id === "workspace") body = <Workspace config={config} seats={seats} onOpen={actions.onOpen} />;
   else if (id === "notices") body = config.workspaceId ? <NoticeBoard workspaceId={config.workspaceId} /> : null;
   else if (id === "stats") body = config.workspaceId ? <OfficeStats workspaceId={config.workspaceId} /> : null;
-  else if (id === "meeting") body = <Meeting />;
+  else if (id === "meeting") body = <Meeting info={meeting} />;
   else if (id === "break") body = <Break />;
   else if (id === "members") body = config.workspaceId ? <TeamPanel workspaceId={config.workspaceId} onChange={actions.onTeam} /> : null;
   else body = <SettingsBody config={config} settings={settings} onSettings={onSettings} actions={actions} />;
@@ -206,13 +211,38 @@ function Workspace({ config, seats, onOpen }: { config: OfficeConfig; seats: Sea
   );
 }
 
-function Meeting() {
+function Meeting({ info }: { info?: MeetingInfo }) {
   return (
     <>
       <p className="text-base">
-        Six chairs, a big screen and a long table — a quiet place to think out loud.
+        {info?.room && /booth/i.test(info.room) ? "A quiet booth with a door that closes — good for a call." : "Six chairs, a big screen and a long table — a quiet place to think out loud."}
       </p>
-      <Note>Video calls aren’t available yet.</Note>
+      {info?.canCall ? (
+        <>
+          <p>
+            {info.inCall.length ? (
+              <>
+                On the call in <strong>{info.room}</strong>: {info.inCall.join(", ")}.
+              </>
+            ) : (
+              <>
+                Nobody is on the call in <strong>{info.room}</strong> yet. Start it and teammates who walk in can join.
+              </>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={info.onJoin}
+            disabled={info.full}
+            className="self-start border-2 border-ink bg-sun px-3 py-2 font-semibold hover:-translate-y-0.5 disabled:opacity-60"
+          >
+            {info.full ? "The call is full" : info.inCall.length ? "Join the video call" : "Start a video call"}
+          </button>
+          <Note>Your browser asks for your camera and microphone. Video goes straight between browsers when your network allows it, and through the office’s server when it doesn’t, so calls work anywhere. Nothing is recorded.</Note>
+        </>
+      ) : (
+        <Note>Step inside the meeting room or a call booth to start a video call.</Note>
+      )}
     </>
   );
 }

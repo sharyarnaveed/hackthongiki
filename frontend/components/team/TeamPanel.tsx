@@ -210,7 +210,7 @@ function MemberRow({
               <span className={`size-2 ${STATUS_DOT[m.status]}`} aria-hidden />
               {STATUS_LABEL[m.status]}
             </span>
-            <span>seen {ago(m.lastSeenAt)}</span>
+            {m.online ? <span className="font-semibold text-forest">● in the office now</span> : <span>seen {ago(m.lastSeenAt)}</span>}
           </p>
         </div>
         {canMoveDesk ? (

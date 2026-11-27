@@ -19,6 +19,7 @@ import { UserModel } from "../src/models/User.ts";
 import { WaitlistModel } from "../src/models/Waitlist.ts";
 import { WorkspaceModel } from "../src/models/Workspace.ts";
 import { NoticeModel } from "../src/models/Notice.ts";
+import { MessageModel } from "../src/models/Message.ts";
 import { catalog } from "@/components/office/game/furniture";
 import { groupOf, isMovable, placementProblem, unreachable, type FurnitureMeta } from "@/components/office/game/layoutEdit";
 
@@ -74,6 +75,7 @@ after(async () => {
   // Remove only what this run created.
   const mine = await WorkspaceModel.find({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] }, { _id: 1 });
   const notices = await NoticeModel.deleteMany({ workspaceId: { $in: mine.map((w) => w._id) } });
+  await MessageModel.deleteMany({ workspaceId: { $in: mine.map((w) => w._id) } });
   const ws = await WorkspaceModel.deleteMany({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] });
   const sessions = await SessionModel.deleteMany({ userId: { $in: userIds } });
   const users = await UserModel.deleteMany({ email: new RegExp(`\\.${RUN}@thespace\\.test$`) });
@@ -664,3 +666,203 @@ describe("office life", () => {
     assert.equal(await NoticeModel.countDocuments({ workspaceId: id }), 0);
   });
 });
+
+describe("live office", () => {
+  let owner: Awaited<ReturnType<typeof newUser>>;
+  let kai: Awaited<ReturnType<typeof newUser>>;
+  let outsider: Awaited<ReturnType<typeof newUser>>;
+  let id = "";
+  const base = () => `/api/workspaces/${id}`;
+  const ORIGIN = "http://localhost:3000";
+
+  /** Open the live socket as someone; `next` waits for the first frame of a type (and matching `pred`). */
+  async function connect(cookie: string, origin = ORIGIN) {
+    const ws = await app.injectWS(`${base()}/live`, { headers: { cookie, origin } });
+    const inbox: any[] = [];
+    const media: Buffer[] = [];
+    let closed: number | null = null;
+    ws.on("message", (d: Buffer, isBinary: boolean) => (isBinary ? media.push(d) : inbox.push(JSON.parse(String(d)))));
+    ws.on("close", (code: number) => (closed = code));
+    const next = (t: string, pred: (m: any) => boolean = () => true, ms = 3000) =>
+      new Promise<any>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => {
+          const i = inbox.findIndex((m) => m.t === t && pred(m));
+          if (i >= 0) return resolve(inbox.splice(i, 1)[0]);
+          if (Date.now() - started > ms) return reject(new Error(`no "${t}" frame within ${ms}ms (got ${inbox.map((m) => m.t).join(", ") || "nothing"})`));
+          setTimeout(look, 20);
+        };
+        look();
+      });
+    const closedWith = (ms = 3000) =>
+      new Promise<number>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => (closed !== null ? resolve(closed) : Date.now() - started > ms ? reject(new Error("socket stayed open")) : setTimeout(look, 20));
+        look();
+      });
+    /** Wait for a relayed voice/video frame. */
+    const nextMedia = (ms = 3000) =>
+      new Promise<Buffer>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => (media.length ? resolve(media.shift()!) : Date.now() - started > ms ? reject(new Error("no media frame")) : setTimeout(look, 20));
+        look();
+      });
+    return { ws, next, nextMedia, media, closedWith, send: (m: object) => ws.send(JSON.stringify(m)) };
+  }
+
+  before(async () => {
+    [owner, kai, outsider] = [await newUser("liveowner"), await newUser("kai"), await newUser("outsider")];
+    const r = await call("POST", "/api/workspaces", owner.cookie, {
+      displayName: "Lou",
+      avatarId: "buddy-maya",
+      workspaceName: `Test Live ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "6-15",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+      officeFeatures: ["desks", "kitchen", "plants", "seating", "office", "meeting"],
+      invitationEmails: [],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    id = r.body.workspaceId;
+    await call("GET", `${base()}/office`, owner.cookie);
+    const j = await call("POST", "/api/workspaces/join", kai.cookie, { displayName: "Kai", avatarId: "buddy-theo", invitationCode: r.body.inviteCode });
+    assert.equal(j.status, 201);
+  });
+
+  it("refuses sockets from other sites", async () => {
+    const evil = await connect(owner.cookie, "https://evil.example");
+    assert.equal(await evil.closedWith(), 4403);
+  });
+
+  it("shows who is here, how they move, what they say and their status", async () => {
+    const lou = await connect(owner.cookie);
+    const hello = await lou.next("welcome");
+    assert.deepEqual(hello.peers, [], "nobody else is in yet");
+
+    const k = await connect(kai.cookie);
+    const kHello = await k.next("welcome");
+    assert.deepEqual(kHello.peers.map((p: any) => p.name), ["Lou"]);
+    const joined = await lou.next("join");
+    assert.equal(joined.peer.name, "Kai");
+    const kaiId = joined.peer.id;
+
+    const members = await call("GET", `${base()}/members`, owner.cookie);
+    assert.ok(members.body.members.every((m: any) => m.online), "both show as in the office");
+
+    k.send({ t: "move", x: joined.peer.x + 4, y: joined.peer.y, frame: 21, anim: "walk-side", flip: true, depth: joined.peer.y, room: "Entrance" });
+    const moved = await lou.next("move", (m) => m.id === kaiId);
+    assert.equal(moved.anim, "walk-side");
+    assert.equal(moved.room, "Entrance");
+
+    // Both stand near the door, so Lou hears Kai.
+    k.send({ t: "say", text: "  morning!  " });
+    assert.equal((await lou.next("say")).text, "morning!");
+
+    await call("PATCH", `${base()}/me/status`, kai.cookie, { status: "focusing" });
+    const status = await lou.next("peer", (m) => m.id === kaiId && m.patch.status);
+    assert.equal(status.patch.status, "focusing");
+
+    k.ws.close();
+    assert.equal((await lou.next("leave")).id, kaiId);
+    lou.ws.close();
+  });
+
+  it("keeps one live connection per member (a new tab takes over)", async () => {
+    const first = await connect(kai.cookie);
+    await first.next("welcome");
+    const second = await connect(kai.cookie);
+    await second.next("welcome");
+    assert.equal(await first.closedWith(), 4409);
+    second.ws.close();
+  });
+
+  it("relays voice to nearby teammates with their mic on, tagged with who's talking", async () => {
+    const lou = await connect(owner.cookie);
+    await lou.next("welcome");
+    const k = await connect(kai.cookie);
+    const louId = (await k.next("welcome")).peers[0].id;
+    const kaiId = (await lou.next("join")).peer.id;
+    const audio = Buffer.from([1, ...Array.from({ length: 640 }, (_, i) => i % 256)]);
+
+    // Lou's mic is off: Kai's voice isn't sent to him.
+    k.send({ t: "voice", on: true });
+    await lou.next("peer", (m) => m.id === kaiId && m.patch.voice === true);
+    k.ws.send(audio);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "only people with voice on hear it");
+
+    lou.send({ t: "voice", on: true });
+    await k.next("peer", (m) => m.patch.voice === true);
+    k.ws.send(audio);
+    const frame = await lou.nextMedia();
+    assert.equal(frame[0], 1, "audio frame");
+    assert.equal(frame.subarray(1, 25).toString("ascii"), kaiId, "tagged with the speaker");
+    assert.deepEqual(frame.subarray(25), audio.subarray(1));
+
+    // Once Kai reaches Lou over a direct WebRTC link, the server stops relaying to him.
+    k.send({ t: "direct", ids: [louId] });
+    await new Promise((r) => setTimeout(r, 50));
+    k.ws.send(audio);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "no relay for direct pairs");
+    k.send({ t: "direct", ids: [] });
+
+    // WebRTC offers are passed on only between the two ends of a link.
+    const link = `prox:${[kaiId, louId].sort().join(":")}`;
+    k.send({ t: "signal", to: louId, link, data: { kind: "offer", sdp: "v=0" } });
+    const offer = await lou.next("signal");
+    assert.equal(offer.from, kaiId);
+    assert.equal(offer.data.kind, "offer");
+
+    // Video only goes to a call.
+    k.ws.send(Buffer.from([2, 0xff, 0xd8, 0xff]));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "no video outside a call");
+    k.ws.close();
+    lou.ws.close();
+  });
+
+  it("only lets people in a call room's call", async () => {
+    const lou = await connect(owner.cookie);
+    const hello = await lou.next("welcome");
+    lou.send({ t: "call", room: "Kitchen" });
+    assert.match((await lou.next("error")).message, /meeting room/);
+    const room = hello.callRooms[0];
+    if (room) {
+      lou.send({ t: "call", room });
+      const joined = await lou.next("peer", (m) => m.patch.call !== undefined);
+      assert.equal(joined.patch.call, room);
+    }
+    lou.ws.close();
+  });
+
+  it("saves workspace chat per channel and sends it live", async () => {
+    const lou = await connect(owner.cookie);
+    await lou.next("welcome");
+    const first = await call("GET", `${base()}/messages`, kai.cookie);
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.deepEqual(first.body.messages, []);
+    assert.equal(first.body.channels[0], "office");
+    assert.ok(first.body.channels.length > 1, "every room has a channel");
+
+    const sent = await call("POST", `${base()}/messages`, kai.cookie, { channel: "office", text: "  Coffee in 5?  " });
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    assert.equal(sent.body.message.text, "Coffee in 5?");
+    assert.equal(sent.body.message.authorName, "Kai");
+    assert.equal((await lou.next("chat")).message.messageId, sent.body.message.messageId);
+
+    const roomChannel = first.body.channels[1];
+    assert.equal((await call("POST", `${base()}/messages`, owner.cookie, { channel: roomChannel, text: "Room only" })).status, 201);
+    const office = await call("GET", `${base()}/messages?channel=office`, owner.cookie);
+    assert.deepEqual(office.body.messages.map((m: any) => m.text), ["Coffee in 5?"], "room messages stay in their room");
+    const inRoom = await call("GET", `${base()}/messages?channel=${encodeURIComponent(roomChannel)}`, owner.cookie);
+    assert.deepEqual(inRoom.body.messages.map((m: any) => m.text), ["Room only"]);
+
+    assert.equal((await call("POST", `${base()}/messages`, kai.cookie, { channel: "Narnia", text: "hi" })).status, 404, "unknown room");
+    assert.equal((await call("POST", `${base()}/messages`, kai.cookie, { channel: "office", text: "   " })).status, 400, "no empty messages");
+    assert.equal((await call("GET", `${base()}/messages`, outsider.cookie)).status, 404, "only members read the chat");
+    lou.ws.close();
+  });
+});
+

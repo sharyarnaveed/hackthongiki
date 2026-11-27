@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { BarChart3, Hand, MapPin, Move, Settings2, StickyNote, Users, Volume2, VolumeX } from "lucide-react";
+import { BarChart3, Hand, MapPin, MessageSquare, Mic, MicOff, Move, Settings2, StickyNote, Users, Volume2, VolumeX, Wifi, WifiOff } from "lucide-react";
 import Link from "next/link";
 import type { Ref } from "react";
 import { PixelImage, PixelSprite } from "@/components/pixel/PixelArt";
@@ -40,6 +40,7 @@ export function Hud({
   onNotices,
   onStats,
   swapsWaiting = 0,
+  live,
 }: {
   config: OfficeConfig;
   /** Map size in tiles, for the minimap frame. */
@@ -59,6 +60,8 @@ export function Hud({
   onStats?: () => void;
   /** Desk swap requests waiting for the viewer's answer, shown as a badge on the members button. */
   swapsWaiting?: number;
+  /** The live office: who's here, chat and proximity voice (shown when given). */
+  live?: LiveHud;
 }) {
   const avatar = avatarById(config.avatarId);
   const mapW = Math.round(mapSize.width * TILE * MINIMAP.scale);
@@ -84,6 +87,17 @@ export function Hud({
             {room}
           </p>
         )}
+        {live && (
+          <button
+            type="button"
+            onClick={live.onPeople}
+            title={live.online ? "Who’s in the office" : "Reconnecting to the live office…"}
+            className={`pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold hover:bg-sun ${chip}`}
+          >
+            {live.online ? <Wifi className="size-3.5 text-forest" aria-hidden /> : <WifiOff className="size-3.5 text-terracotta" aria-hidden />}
+            {live.online ? `${live.here} here` : "Offline"}
+          </button>
+        )}
       </div>
 
       {/* Top-right: player, sound, settings */}
@@ -103,6 +117,37 @@ export function Hud({
         >
           {settings.sound ? <Volume2 className="size-5" aria-hidden /> : <VolumeX className="size-5" aria-hidden />}
         </button>
+        {live && (
+          <button
+            type="button"
+            onClick={live.onVoice}
+            aria-pressed={live.voiceOn}
+            aria-label={live.voiceOn ? "Turn off proximity voice" : "Talk to people nearby"}
+            title={
+              live.voiceOn
+                ? live.talkingWith.length
+                  ? `Talking with ${live.talkingWith.join(", ")}`
+                  : "Mic on — walk up to someone with their mic on to talk"
+                : "Proximity voice: talk to people standing near you"
+            }
+            className={`pointer-events-auto relative grid size-10 place-items-center ${chip} ${live.voiceOn ? "bg-sage" : ""} hover:bg-sun`}
+          >
+            {live.voiceOn ? <Mic className="size-5" aria-hidden /> : <MicOff className="size-5" aria-hidden />}
+            {live.voiceOn && live.talkingWith.length > 0 && <Badge>{live.talkingWith.length}</Badge>}
+          </button>
+        )}
+        {live && (
+          <button
+            type="button"
+            onClick={live.onChat}
+            aria-label={live.unread ? `Chat, ${live.unread} unread` : "Chat"}
+            title="Chat (Enter)"
+            className={`pointer-events-auto relative grid size-10 place-items-center ${chip} hover:bg-sun`}
+          >
+            <MessageSquare className="size-5" aria-hidden />
+            {live.unread > 0 && <Badge testId="chat-badge">{live.unread}</Badge>}
+          </button>
+        )}
         {onNotices && (
           <button type="button" onClick={onNotices} aria-label="Notice board" title="Notice board" className={`pointer-events-auto grid size-10 place-items-center ${chip} hover:bg-sun`}>
             <StickyNote className="size-5" aria-hidden />
@@ -121,15 +166,7 @@ export function Hud({
           className={`pointer-events-auto relative grid size-10 place-items-center ${chip} hover:bg-sun`}
         >
           <Users className="size-5" aria-hidden />
-          {swapsWaiting > 0 && (
-            <span
-              aria-hidden
-              data-testid="swap-badge"
-              className="absolute -right-2 -top-2 grid h-5 min-w-5 place-items-center border-2 border-ink bg-terracotta px-0.5 font-pixel text-[0.55rem] leading-none text-ink"
-            >
-              {swapsWaiting > 9 ? "9+" : swapsWaiting}
-            </span>
-          )}
+          {swapsWaiting > 0 && <Badge testId="swap-badge">{swapsWaiting}</Badge>}
         </button>
         <button
           type="button"
@@ -159,6 +196,11 @@ export function Hud({
         <span className="flex items-center gap-1">
           <Key>Esc</Key> close
         </span>
+        {live && (
+          <span className="flex items-center gap-1">
+            <Key>Enter</Key> chat
+          </span>
+        )}
       </div>
 
       {/* Bottom-centre: pointer/touch-friendly interact button */}
@@ -185,6 +227,31 @@ export function Hud({
         />
       )}
     </div>
+  );
+}
+
+/** What the HUD shows of the live office. */
+export type LiveHud = {
+  online: boolean;
+  /** People in the office, you included. */
+  here: number;
+  unread: number;
+  voiceOn: boolean;
+  talkingWith: string[];
+  onChat: () => void;
+  onPeople: () => void;
+  onVoice: () => void;
+};
+
+function Badge({ children, testId }: { children: number; testId?: string }) {
+  return (
+    <span
+      aria-hidden
+      data-testid={testId}
+      className="absolute -right-2 -top-2 grid h-5 min-w-5 place-items-center border-2 border-ink bg-terracotta px-0.5 font-pixel text-[0.55rem] leading-none text-ink"
+    >
+      {children > 9 ? "9+" : children}
+    </span>
   );
 }
 
@@ -232,16 +299,22 @@ export function PlayerAnchor({
   status,
   showName,
   prompt,
+  bubble,
 }: {
   ref: Ref<HTMLDivElement>;
   name: string;
   status: Status;
   showName: boolean;
   prompt: GameEvents["prompt"];
+  /** Something you just said out loud. */
+  bubble?: string;
 }) {
   return (
     <div ref={ref} aria-hidden className="pointer-events-none absolute left-0 top-0 will-change-transform">
       <div className="absolute bottom-1 left-0 flex -translate-x-1/2 flex-col items-center gap-1.5">
+        {bubble && !prompt && (
+          <p className="max-w-[14rem] whitespace-normal break-words border-2 border-ink bg-paper-light px-2 py-1 text-center text-xs font-medium shadow-pixel-sm">{bubble}</p>
+        )}
         {prompt && (
           <p className="whitespace-nowrap border-2 border-ink bg-paper-light px-2 py-1 font-pixel text-[0.65rem] uppercase tracking-wide shadow-pixel-sm">
             {prompt.interaction.prompt} — <span className="text-terracotta">Press E</span>

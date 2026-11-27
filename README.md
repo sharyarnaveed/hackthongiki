@@ -44,7 +44,35 @@ npm test
 | `LOG_LEVEL` | Log level (default `info`; `debug`, `warn`, `silent`…) |
 | `LOG_REQUESTS` | `off` hides the one-line access log for each request |
 
-The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
+`backend/.env.example` lists every backend setting with a comment (copy it to `backend/.env`). `CLIENT_ORIGIN` accepts `*` for any subdomain, e.g. `https://*.ngrok-free.app`.
+
+`frontend/main.env` (copy `frontend/main.env.example`; read by `next.config.ts`):
+
+| Variable | What it's for |
+|---|---|
+| `API_INTERNAL_URL` | Where the frontend forwards `/api` — REST and the live WebSocket (default `http://127.0.0.1:4000`) |
+| `NEXT_PUBLIC_API_URL` | Where the browser calls the API. Empty = automatic: `http://localhost:4000` on localhost, the page's own address (`/api`) through ngrok. Set it only for an API on its own public domain |
+| `NEXT_PUBLIC_STUN_URLS` | STUN servers for direct voice/video (default Google's public one); `off` = everything through the API relay |
+| `DEV_ORIGINS` | Extra hosts allowed to open the dev site (ngrok hosts already are) |
+
+### Open the office on another device (ngrok)
+
+Only the frontend is tunnelled; it forwards `/api` (and the live WebSocket) to your backend, so cookies, the live office and the mic/camera (HTTPS) all work on one address.
+
+```bash
+cd backend && npm run dev      # the API on :4000
+cd frontend && npm run dev     # the site on :3000
+ngrok http 3000                # open the https://… link on the other device
+```
+
+Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to point there.
+
+### Voice & video: direct first, relay as a fallback (no TURN)
+
+- **Direct (lowest latency, ~50–100 ms):** each pair of browsers first tries a WebRTC connection, signalled over the live socket, using a public STUN server to find each other. Calls get real video, and the browser's echo cancellation works fully.
+- **Relay (works anywhere):** if a pair hasn't connected directly within 6 s (strict firewalls, some VPNs and mobile networks), its media goes over the live WebSocket instead and the API passes it on. No TURN server needed. Voice: 16 kHz µ-law in 20 ms frames, sent only while you talk, played through a 60 ms jitter buffer. Video: 320×180 JPEG snapshots, 8 a second. A failed pair tries direct again after 45 s.
+- Each browser tells the API which teammates it reaches directly (`direct`), so the API doesn't also relay to them and nobody hears double.
+- Browsers only allow the mic and camera on HTTPS (or `localhost`). Headphones avoid echo.
 
 ---
 
@@ -113,6 +141,18 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
   - Pieces must stay inside the walls, off other furniture and off the entrance, and can't box off anything you can use; the server checks the same rules (shared code in `game/layoutEdit.ts`)
   - Every move says where the piece was, and saves are versioned, so a tab with an older layout can't scramble the office. Changing the floor plan, style or furniture rebuilds the office as before
 
+### Real-time (multiplayer)
+- [x] **Live office socket** (`GET /api/workspaces/:id/live`, `@fastify/websocket`): signed in with the session cookie, and the page's Origin must be our frontend (CORS doesn't cover sockets). One connection per member: opening the office in a second tab takes over ("Use this tab" brings it back). Reconnects with backoff when the network drops; dead sockets are dropped by a 25 s ping
+- [x] **Presence**: teammates' avatars walk around your office in real time (their own avatar, animation, facing, sitting at desks/sofas), with name tags, status dots and markers on the minimap. The HUD shows how many people are here; *People* in the chat lists everyone with their status and room. The members panel says who is "in the office now", and last seen is saved when someone leaves
+- [x] Status, name tag and avatar changes show up for everyone straight away; when the owner rebuilds the office or moves furniture, everyone else's office reloads with it
+- [x] **Proximity chat**: the *Nearby* tab says things out loud; only people within 6 tiles get it, as a speech bubble over your avatar (not saved)
+- [x] **Proximity voice** (🎤 button): with your mic on you hear teammates who also have it on when you walk up to them, louder the closer you are; walk away and it fades out. Direct WebRTC between browsers, or relayed by the API when that's blocked (see *Voice & video*); the 🎤 badge shows how many people you're hearing
+- [x] **Works behind strict firewalls** without a TURN server: pairs that can't connect directly fall back to the API relaying their media over the same WebSocket
+- [x] **Video calls** in the meeting room and call/phone booths: walk up to the table or booth, press E and *Start / Join the video call*. Everyone in that room's call hears and sees everyone (up to 8), with mute, camera off and leave; no camera joins with sound only. Walking out of the room hangs up
+- [x] **Workspace chat** (`messages` collection): an *Office* channel for everyone and one channel per room of the office (the tab follows the room you're standing in). History loads 50 at a time; new messages arrive live, with an unread badge on 💬. Press Enter to open the chat; typing pauses your avatar. Up to 500 characters, 10 messages per 10 s; deleted with the workspace
+- [x] Rate limits on the socket too (moves, speech, voice and video frames), and moves are checked against the office's size
+- [x] Protocol shared by both sides in `frontend/components/office/live/protocol.ts`
+
 ### No mock data
 - [x] Removed the demo office, guest user and the `/office-preview` page
 - [x] The office only loads from the server; with no workspace you're sent to onboarding, and with no session you're sent to sign-in
@@ -129,11 +169,11 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] Failed and rejected requests logged with the reason (request bodies hidden for auth routes)
 
 ### Tests
-- [x] `npm test` in `backend/` runs 33 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
-- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting, the notice board, office stats (coffee/cat counting, focus time and its cap) and moving furniture (owner only, walls, stale moves)
+- [x] `npm test` in `backend/` runs 39 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
+- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting, the notice board, office stats (coffee/cat counting, focus time and its cap), moving furniture (owner only, walls, stale moves) and the live office (origin check, presence, movement, nearby speech, live status, one socket per member, relayed voice, no relay for direct pairs, WebRTC signalling, call rooms, chat channels)
 - [x] Emails are kept in memory during tests (`MAIL_TRANSPORT=memory`), nothing is really sent
 - [x] Uses the same database as the app, but only creates records tagged with a run id (`…@thespace.test`) and deletes exactly those afterwards
-- [x] `npm test` in `frontend/` runs 75 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, the dashboard dialogs (edit, delete/leave, members), the notice board (read-only and owner views, add/edit/pin/delete, errors, full board) and the stats panel
+- [x] `npm test` in `frontend/` runs 80 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, the dashboard dialogs (edit, delete/leave, members), the notice board (read-only and owner views, add/edit/pin/delete, errors, full board), the stats panel and the live socket client (presence, relayed media frames, reconnecting, tab takeover)
 - [x] The 👥 button in the office shows a badge with desk swap requests waiting for you (checked every 30 s and when you come back to the tab), and a toast when a new one arrives
 
 ---
@@ -180,6 +220,9 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 | GET | `/api/workspaces/:id/stats` | Coffees, cat pets and focus time: office totals, yours and each member's |
 | POST | `/api/workspaces/:id/me/stats` | Count a `coffee` or a `cat` pet |
 | PUT | `/api/workspaces/:id/office/layout` | Owner: save moved furniture (`moves`: index, kind, from, to) |
+| GET (WebSocket) | `/api/workspaces/:id/live` | The live office: presence, movement, status, proximity chat, WebRTC signalling and relayed voice/video |
+| GET | `/api/workspaces/:id/messages` | Chat in a `channel` (`office` or a room name), 50 at a time (`before` pages back), plus the channel list and who's online |
+| POST | `/api/workspaces/:id/messages` | Post `text` to a `channel`; sent live to everyone in the office |
 | POST | `/api/workspaces/:id/transfer` | Owner: hand the workspace to another member (they get an email) |
 | GET | `/api/workspaces/invitations/:code` | Check an invitation code |
 | POST | `/api/workspaces/join` | Join with an invitation code |
@@ -200,11 +243,11 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [ ] See and sign out of other sessions
 
 ### Real-time (multiplayer)
-- [ ] WebSocket server for presence: see who's online and where they are walking
-- [ ] Show teammates' avatars and live status in the office
-- [ ] Proximity chat / voice when avatars are near each other
-- [ ] Video calls in the meeting room and call booths
-- [ ] Workspace chat (`messages` collection, per room)
+- [x] WebSocket server for presence: see who's online and where they are walking
+- [x] Show teammates' avatars and live status in the office
+- [x] Proximity chat / voice when avatars are near each other
+- [x] Video calls in the meeting room and call booths
+- [x] Workspace chat (`messages` collection, per room)
 
 ### Office life
 - [x] Notice board the owner can edit (`notices` collection)

@@ -20,6 +20,8 @@ export type TeamMember = {
   statusUpdatedAt?: string;
   joinedAt?: string;
   lastSeenAt?: string;
+  /** In the office right now (connected to the live office). */
+  online?: boolean;
   you: boolean;
 };
 

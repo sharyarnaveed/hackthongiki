@@ -1,12 +1,12 @@
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
 import Fastify, { LogController, type FastifyError } from "fastify";
+import { CLIENT_ORIGIN } from "./lib/origin.ts";
+import { live } from "./live/hub.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { workspaceRoutes } from "./routes/workspaces.ts";
 import { waitlistRoutes } from "./routes/waitlist.ts";
-
-// Allowed frontend origins: CLIENT_ORIGIN (comma-separated) if set, otherwise any localhost port.
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN?.split(",").map((o) => o.trim()) ?? /^http:\/\/(localhost|127\.0\.0\.1):\d+$/;
 
 /** Routes whose request bodies must never be logged (passwords, codes). */
 const SECRET_BODY = /^\/api\/auth/;
@@ -36,6 +36,10 @@ export async function buildApp() {
   // credentials: true lets the browser send the session cookie cross-origin (frontend :3000 → API :4000).
   await app.register(cors, { origin: CLIENT_ORIGIN, credentials: true });
   await app.register(cookie);
+  // Live office (presence, movement, chat, relayed voice/video). The biggest frame is a 48 KB video snapshot.
+  await app.register(websocket, { options: { maxPayload: 64 * 1024 } });
+  live.start(app.log);
+  app.addHook("onClose", async () => live.stop());
 
   // One access line per request: method, path, status, time and who asked.
   if (process.env.LOG_REQUESTS !== "off") {
