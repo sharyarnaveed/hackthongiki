@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    // The office generator lives in the frontend and is shared with the server
+    // (src/lib/office.ts); its own imports use the frontend's "@/" alias.
+    "paths": {
+      "@/*": ["../frontend/*"]
+    }
+  },
+  "include": ["app.ts", "src/**/*.ts"]
+}

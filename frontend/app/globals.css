@@ -1,458 +1,383 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 
-/* Dark variant follows the `.dark` class on <html> (set by ThemeProvider). */
-@custom-variant dark (&:is(.dark *));
-/* Mode variants: `office:` and `home:` utilities, e.g. `home:font-heading`. */
-@custom-variant office (&:where([data-mode="office"], [data-mode="office"] *));
-@custom-variant home (&:where([data-mode="home"], [data-mode="home"] *));
+@theme {
+  --color-paper: #f5f1e8;
+  --color-paper-deep: #ece5d6;
+  --color-paper-light: #faf7f0;
+  --color-forest: #294b38;
+  --color-forest-deep: #1f3a2b;
+  --color-sage: #a7b99b;
+  --color-terracotta: #c98260;
+  --color-sun: #e6c76a;
+  --color-ink: #252820;
+  /* #73766B nudged a touch darker so small secondary text keeps AA contrast on paper */
+  --color-muted: #686b60;
+  --color-line: rgb(37 40 32 / 0.16);
 
-/* ------------------------------------------------------------------ */
-/* Design tokens                                                       */
-/* One token set, four values: office/home × light/dark.               */
-/* ------------------------------------------------------------------ */
+  --font-display: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", monospace;
+  --font-pixel: var(--font-silkscreen), var(--font-plex-mono), monospace;
 
-/* OFFICE · light (also the default before hydration) */
-:root,
-[data-mode="office"] {
-  --radius: 0.5rem;
-  --density: 0.875;
-
-  --background: #f6f8fb;
-  --foreground: #0f172a;
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #2563eb;
-  --primary-foreground: #ffffff;
-  --secondary: #eef2f7;
-  --secondary-foreground: #1e293b;
-  --muted: #eef2f7;
-  --muted-foreground: #64748b;
-  --accent: #e0eaff;
-  --accent-foreground: #1e3a8a;
-  --destructive: #dc2626;
-  --border: #e2e8f0;
-  --input: #dbe2ea;
-  --ring: #3b82f6;
-
-  --success: #16a34a;
-  --warning: #f59e0b;
-  --info: #0ea5e9;
-
-  --status-online: #22c55e;
-  --status-busy: #ef4444;
-  --status-away: #f59e0b;
-  --status-offline: #94a3b8;
-
-  --rarity-common: #64748b;
-  --rarity-rare: #2563eb;
-  --rarity-epic: #9333ea;
-
-  --sidebar: #ffffff;
-  --sidebar-foreground: #0f172a;
-  --titlebar: #ffffff;
-
-  --map-floor: #eef2f7;
-  --map-room: #ffffff;
-  --map-wall: #cbd5e1;
-
-  --shadow-color: 15 23 42;
-  --elev-1: 0 1px 2px rgb(var(--shadow-color) / 0.06), 0 1px 3px rgb(var(--shadow-color) / 0.08);
-  --elev-2: 0 4px 12px rgb(var(--shadow-color) / 0.08);
-
-  --heading-font: var(--font-inter);
-  --pixel: 0px;
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* OFFICE · dark */
-[data-mode="office"].dark,
-.dark:not([data-mode]) {
-  --background: #0b1120;
-  --foreground: #e2e8f0;
-  --card: #111a2e;
-  --card-foreground: #e2e8f0;
-  --popover: #111a2e;
-  --popover-foreground: #e2e8f0;
-  --primary: #3b82f6;
-  --primary-foreground: #ffffff;
-  --secondary: #1a2540;
-  --secondary-foreground: #e2e8f0;
-  --muted: #16203a;
-  --muted-foreground: #94a3b8;
-  --accent: #1e2c4f;
-  --accent-foreground: #bfdbfe;
-  --destructive: #ef4444;
-  --border: #1f2b45;
-  --input: #263452;
-  --ring: #60a5fa;
-
-  --sidebar: #0e1628;
-  --sidebar-foreground: #e2e8f0;
-  --titlebar: #0e1628;
-
-  --map-floor: #0e1628;
-  --map-room: #16203a;
-  --map-wall: #2b3a5c;
-
-  --shadow-color: 0 0 0;
-  --elev-1: 0 1px 2px rgb(0 0 0 / 0.4);
-  --elev-2: 0 6px 16px rgb(0 0 0 / 0.45);
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
 }
 
-/* HOME · light — warm, cozy, pixel */
-[data-mode="home"] {
-  --radius: 0rem;
-  --density: 1;
-  --pixel: 4px;
-
-  --background: #fbf1e3;
-  --foreground: #4a3426;
-  --card: #fff8ee;
-  --card-foreground: #4a3426;
-  --popover: #fff8ee;
-  --popover-foreground: #4a3426;
-  --primary: #e8796b;
-  --primary-foreground: #fffaf3;
-  --secondary: #f6dcc2;
-  --secondary-foreground: #5a3d2b;
-  --muted: #f3e3cf;
-  --muted-foreground: #8b6b55;
-  --accent: #b9d8b0;
-  --accent-foreground: #2f4a2b;
-  --destructive: #d0493f;
-  --border: #5a3d2b;
-  --input: #d9bfa3;
-  --ring: #e8796b;
-
-  --success: #6aa95f;
-  --warning: #e6a945;
-  --info: #6ea8c9;
-
-  --status-online: #6aa95f;
-  --status-busy: #d0493f;
-  --status-away: #e6a945;
-  --status-offline: #b39a85;
-
-  --rarity-common: #9a836f;
-  --rarity-rare: #5b8fc7;
-  --rarity-epic: #a46ad1;
-
-  --sidebar: #f6e4cd;
-  --sidebar-foreground: #4a3426;
-  --titlebar: #f1d9bd;
-
-  /* house tiles */
-  --tile-floor-a: #e9c99d;
-  --tile-floor-b: #e2bf91;
-  --tile-wood-a: #c98d5c;
-  --tile-wood-b: #bf8352;
-  --tile-kitchen-a: #f3efe6;
-  --tile-kitchen-b: #ddd6c8;
-  --tile-wall: #8a5a3c;
-  --tile-wall-top: #a8734f;
-  --tile-grid: rgb(90 61 43 / 0.18);
-
-  --pixel-border-color: #5a3d2b;
-  --pixel-shadow-color: rgb(90 61 43 / 0.35);
-
-  --shadow-color: 90 61 43;
-  --elev-1: 4px 4px 0 0 var(--pixel-shadow-color);
-  --elev-2: 6px 6px 0 0 var(--pixel-shadow-color);
-
-  --heading-font: var(--font-press-start), var(--font-inter);
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  overflow-x: clip;
 }
 
-/* HOME · dark — warm night: plum + amber */
-[data-mode="home"].dark {
-  --background: #241a2b;
-  --foreground: #f6e6d3;
-  --card: #2f2238;
-  --card-foreground: #f6e6d3;
-  --popover: #2f2238;
-  --popover-foreground: #f6e6d3;
-  --primary: #f0a85a;
-  --primary-foreground: #2a1c22;
-  --secondary: #3d2c47;
-  --secondary-foreground: #f6e6d3;
-  --muted: #382a42;
-  --muted-foreground: #c4a8b8;
-  --accent: #5d7d5a;
-  --accent-foreground: #f1f7ea;
-  --destructive: #e2635a;
-  --border: #120c16;
-  --input: #4b3858;
-  --ring: #f0a85a;
-
-  --sidebar: #2a1f33;
-  --sidebar-foreground: #f6e6d3;
-  --titlebar: #1e1624;
-
-  --tile-floor-a: #5a4256;
-  --tile-floor-b: #533c50;
-  --tile-wood-a: #6e4a3e;
-  --tile-wood-b: #654337;
-  --tile-kitchen-a: #4b4458;
-  --tile-kitchen-b: #423b4e;
-  --tile-wall: #1c1320;
-  --tile-wall-top: #33243b;
-  --tile-grid: rgb(0 0 0 / 0.25);
-
-  --pixel-border-color: #120c16;
-  --pixel-shadow-color: rgb(0 0 0 / 0.45);
+/* Paper grain: a fixed, very light turbulence layer over everything. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.32;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.45  0 0 0 0 0.40  0 0 0 0 0.30  0 0 0 0.22 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
-/* ------------------------------------------------------------------ */
-/* Tailwind theme mapping                                              */
-/* ------------------------------------------------------------------ */
-@theme inline {
-  --font-sans: var(--font-inter), system-ui, sans-serif;
-  --font-pixel: var(--font-press-start), monospace;
-  --font-heading: var(--heading-font);
-
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-info: var(--info);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-titlebar: var(--titlebar);
-
-  --color-status-online: var(--status-online);
-  --color-status-busy: var(--status-busy);
-  --color-status-away: var(--status-away);
-  --color-status-offline: var(--status-offline);
-
-  --color-rarity-common: var(--rarity-common);
-  --color-rarity-rare: var(--rarity-rare);
-  --color-rarity-epic: var(--rarity-epic);
-
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-
-  --shadow-elev-1: var(--elev-1);
-  --shadow-elev-2: var(--elev-2);
-
-  --animate-bob: bob 1.2s steps(2, jump-none) infinite;
-  @keyframes bob {
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-2px);
-    }
-  }
+/* Emphasis is carried by colour and weight, not slant. */
+em {
+  font-style: normal;
 }
 
-/* ------------------------------------------------------------------ */
-/* Base                                                                */
-/* ------------------------------------------------------------------ */
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  html,
-  body {
-    height: 100%;
-  }
-  body {
-    background: var(--background);
-    color: var(--foreground);
-    font-family: var(--font-inter), system-ui, sans-serif;
-    min-width: 1024px;
-    overflow: hidden; /* desktop app: panes scroll, not the window */
-  }
-  h1,
-  h2,
-  h3 {
-    font-family: var(--heading-font);
-  }
-  [data-mode="home"] h1,
-  [data-mode="home"] h2,
-  [data-mode="home"] h3 {
-    line-height: 1.5;
-    letter-spacing: 0;
-  }
+::selection {
+  background: var(--color-sun);
+  color: var(--color-ink);
 }
 
-/* ------------------------------------------------------------------ */
-/* Utilities shared by both modes                                      */
-/* ------------------------------------------------------------------ */
-@utility drag-region {
-  -webkit-app-region: drag;
-  user-select: none;
-}
-
-@utility no-drag {
-  -webkit-app-region: no-drag;
-}
-
-@utility pixel-border {
-  border: 0 !important;
-  border-radius: 0 !important;
-  box-shadow:
-    0 calc(var(--pixel, 4px) * -1) 0 0 var(--pixel-border-color),
-    0 var(--pixel, 4px) 0 0 var(--pixel-border-color),
-    calc(var(--pixel, 4px) * -1) 0 0 0 var(--pixel-border-color),
-    var(--pixel, 4px) 0 0 0 var(--pixel-border-color),
-    calc(var(--pixel, 4px) * 2) calc(var(--pixel, 4px) * 2) 0 0 var(--pixel-shadow-color);
-}
-
-@utility pixel-border-flat {
-  border: 0 !important;
-  border-radius: 0 !important;
-  box-shadow:
-    0 calc(var(--pixel, 4px) * -1) 0 0 var(--pixel-border-color),
-    0 var(--pixel, 4px) 0 0 var(--pixel-border-color),
-    calc(var(--pixel, 4px) * -1) 0 0 0 var(--pixel-border-color),
-    var(--pixel, 4px) 0 0 0 var(--pixel-border-color);
+:focus-visible {
+  outline: 2px dashed var(--color-forest);
+  outline-offset: 3px;
 }
 
 @utility pixelated {
   image-rendering: pixelated;
-  image-rendering: crisp-edges;
 }
 
-@utility scrollbar-thin {
-  scrollbar-width: thin;
+@utility font-condensed {
+  font-family: var(--font-sans);
+  font-stretch: 62%;
+  font-variation-settings: "wdth" 62;
+}
+
+/* Dotted rule used as an editorial divider */
+@utility rule-dotted {
+  background-image: radial-gradient(circle, var(--color-line) 1px, transparent 1.2px);
+  background-size: 8px 8px;
+  background-repeat: repeat-x;
+  background-position: left center;
+}
+
+/* Blocky "pixel" shadow: hard offset, no blur. */
+@utility shadow-pixel {
+  box-shadow: 4px 4px 0 0 var(--color-ink);
+}
+@utility shadow-pixel-sm {
+  box-shadow: 3px 3px 0 0 var(--color-ink);
 }
 
 /* ------------------------------------------------------------------ */
-/* Home skin for shadcn primitives (keyed off data-slot)               */
-/* Keeps one component API; the mode decides the look.               */
+/* Pixel sprites                                                       */
 /* ------------------------------------------------------------------ */
-[data-mode="home"] {
-  [data-slot="button"] {
-    border-radius: 0;
-    font-family: var(--font-press-start), monospace;
-    font-size: 10px;
-    letter-spacing: 0;
-    text-transform: uppercase;
-    transition:
-      transform 60ms steps(1),
-      box-shadow 60ms steps(1);
-  }
-  [data-slot="button"]:not([data-variant="ghost"]):not([data-variant="link"]) {
-    border: 0;
-    box-shadow:
-      0 -3px 0 0 var(--pixel-border-color),
-      0 3px 0 0 var(--pixel-border-color),
-      -3px 0 0 0 var(--pixel-border-color),
-      3px 0 0 0 var(--pixel-border-color),
-      inset 0 -3px 0 0 rgb(0 0 0 / 0.18),
-      5px 5px 0 0 var(--pixel-shadow-color);
-    margin: 3px;
-  }
-  [data-slot="button"]:not([data-variant="ghost"]):not([data-variant="link"]):active:not(:disabled) {
-    transform: translate(2px, 2px);
-    box-shadow:
-      0 -3px 0 0 var(--pixel-border-color),
-      0 3px 0 0 var(--pixel-border-color),
-      -3px 0 0 0 var(--pixel-border-color),
-      3px 0 0 0 var(--pixel-border-color),
-      inset 0 3px 0 0 rgb(0 0 0 / 0.18),
-      2px 2px 0 0 var(--pixel-shadow-color);
-  }
 
-  [data-slot="card"],
-  [data-slot="dialog-content"],
-  [data-slot="sheet-content"],
-  [data-slot="dropdown-menu-content"],
-  [data-slot="select-content"],
-  [data-slot="popover-content"] {
-    border: 0;
-    border-radius: 0;
-    box-shadow:
-      0 -4px 0 0 var(--pixel-border-color),
-      0 4px 0 0 var(--pixel-border-color),
-      -4px 0 0 0 var(--pixel-border-color),
-      4px 0 0 0 var(--pixel-border-color),
-      8px 8px 0 0 var(--pixel-shadow-color);
-  }
-  [data-slot="card-title"],
-  [data-slot="dialog-title"],
-  [data-slot="sheet-title"] {
-    font-family: var(--font-press-start), monospace;
-    font-size: 12px;
-    line-height: 1.6;
-  }
+.pixel-sprite {
+  position: relative;
+  overflow: hidden;
+  image-rendering: pixelated;
+}
 
-  [data-slot="input"],
-  [data-slot="select-trigger"],
-  [data-slot="textarea"] {
-    border-radius: 0;
-    border-width: 0;
-    background: var(--card);
-    box-shadow:
-      0 -3px 0 0 var(--pixel-border-color),
-      0 3px 0 0 var(--pixel-border-color),
-      -3px 0 0 0 var(--pixel-border-color),
-      3px 0 0 0 var(--pixel-border-color),
-      inset 3px 3px 0 0 rgb(0 0 0 / 0.08);
-    margin: 3px;
-  }
+.sprite-strip {
+  display: block;
+  height: 100%;
+  animation: sprite-play var(--dur) steps(var(--frames)) var(--delay, 0s) infinite;
+}
 
-  [data-slot="badge"] {
-    border-radius: 0;
-    font-family: var(--font-press-start), monospace;
-    font-size: 8px;
-    padding: 4px 6px;
-    box-shadow: 0 0 0 2px var(--pixel-border-color);
-    border: 0;
-  }
+.sprite-strip.sprite-hover {
+  animation-play-state: paused;
+}
+.group:hover .sprite-strip.sprite-hover,
+.group:focus-within .sprite-strip.sprite-hover {
+  animation-play-state: running;
+}
 
-  [data-slot="progress"] {
-    border-radius: 0;
-    height: 14px;
-    background: var(--muted);
-    box-shadow: 0 0 0 3px var(--pixel-border-color);
+@keyframes sprite-play {
+  to {
+    transform: translateX(-100%);
   }
-  [data-slot="progress-indicator"] {
-    background-image: repeating-linear-gradient(
-      90deg,
-      var(--primary) 0 8px,
-      color-mix(in srgb, var(--primary) 80%, black) 8px 10px
-    );
-  }
+}
 
-  [data-slot="switch"],
-  [data-slot="switch-thumb"],
-  [data-slot="avatar"],
-  [data-slot="tabs-list"],
-  [data-slot="tabs-trigger"],
-  [data-slot="toggle-group"],
-  [data-slot="toggle-group-item"] {
-    border-radius: 0 !important;
+/* Scenes are size containers so ambient motion can be expressed in cqw. */
+.scene {
+  container-type: inline-size;
+}
+
+/* Walk back and forth, flipping at each end. */
+.walk-loop {
+  animation: walk-loop 22s linear infinite;
+}
+@keyframes walk-loop {
+  0%,
+  6% {
+    transform: translateX(0) scaleX(1);
   }
-  [data-slot="tabs-trigger"] {
-    font-family: var(--font-press-start), monospace;
-    font-size: 9px;
+  44% {
+    transform: translateX(var(--walk, 30cqw)) scaleX(1);
+  }
+  50% {
+    transform: translateX(var(--walk, 30cqw)) scaleX(-1);
+  }
+  56% {
+    transform: translateX(var(--walk, 30cqw)) scaleX(-1);
+  }
+  94% {
+    transform: translateX(0) scaleX(-1);
+  }
+  100% {
+    transform: translateX(0) scaleX(1);
+  }
+}
+/* The walking cycle and the label pause while they stand at each end. */
+.walk-label {
+  animation: walk-label 22s linear infinite;
+}
+@keyframes walk-label {
+  0%,
+  6% {
+    transform: translateX(0);
+  }
+  44%,
+  56% {
+    transform: translateX(var(--walk, 30cqw));
+  }
+  94%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* Little square puffs of steam, stepping upwards. */
+.steam {
+  position: absolute;
+  width: 0.65cqw;
+  aspect-ratio: 1;
+  background: #fffaf0;
+  opacity: 0;
+  animation: steam 2.4s steps(6) infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes steam {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(var(--sx, 0.4cqw), -3.2cqw);
+    opacity: 0;
+  }
+}
+
+/* Water drops falling from the watering can. */
+.drop {
+  position: absolute;
+  width: 0.32cqw;
+  height: 0.62cqw;
+  background: #a8cfd0;
+  opacity: 0;
+  animation: drop 1s steps(5) infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes drop {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(2.6cqw);
+    opacity: 0;
+  }
+}
+
+.twinkle {
+  animation: twinkle 3.2s steps(2) infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes twinkle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.sunbeam {
+  animation: sunbeam 9s ease-in-out infinite alternate;
+  transform-box: fill-box;
+}
+@keyframes sunbeam {
+  from {
+    opacity: 0.22;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0.42;
+    transform: translateX(3px);
+  }
+}
+
+.mote {
+  animation: mote 7s steps(14) infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes mote {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  20%,
+  80% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translate(6px, -10px);
+    opacity: 0;
+  }
+}
+
+/* Floating music notes and z's. */
+.float-up {
+  animation: float-up 3.6s steps(9) infinite;
+  animation-delay: var(--d, 0s);
+  opacity: 0;
+}
+@keyframes float-up {
+  0% {
+    transform: translate(0, 0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--fx, 1.2cqw), -4cqw);
+    opacity: 0;
+  }
+}
+
+/* Speech bubble that pops in while someone waves. */
+.bubble-pop {
+  animation: bubble-pop 8s steps(1) infinite;
+  transform-origin: bottom right;
+}
+@keyframes bubble-pop {
+  0%,
+  9% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(0.9);
+  }
+  11%,
+  48% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  49%,
+  100% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+.blink-cursor {
+  animation: twinkle 1.1s steps(1) infinite;
+}
+
+.lamp-glow {
+  animation: lamp-glow 5s ease-in-out infinite alternate;
+}
+@keyframes lamp-glow {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 0.55;
+  }
+}
+
+.marquee {
+  animation: marquee 40s linear infinite;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Once a Phaser stage is live it draws the actors; hide the static fallback sprites. */
+.phaser-ready .scene > :not(svg) {
+  visibility: hidden;
+}
+
+/* Lighter workload on small screens: drop purely ambient particles. */
+@media (max-width: 639px) {
+  .ambient-sm-off {
+    display: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-bob {
-    animation: none;
+  html {
+    scroll-behavior: auto;
+  }
+  .sprite-strip,
+  .walk-loop,
+  .walk-label,
+  .twinkle,
+  .sunbeam,
+  .lamp-glow,
+  .blink-cursor,
+  .marquee {
+    animation: none !important;
+  }
+  .steam,
+  .drop,
+  .mote,
+  .float-up {
+    animation: none !important;
+    opacity: 0 !important;
+  }
+  .bubble-pop {
+    animation: none !important;
+    opacity: 1;
+  }
+}
+
+/* Touch devices can't hover, so let hover-only sprites play on their own. */
+@media (hover: none) {
+  .sprite-strip.sprite-hover {
+    animation-play-state: running;
   }
 }
