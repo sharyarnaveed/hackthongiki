@@ -104,6 +104,15 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] The player's last position is saved (every 15 s when moved, when the tab is hidden or closed) and you start there next time; positions reset when the office is rebuilt
 - [x] The office reopens clean (no panel left open) when you come back from the dashboard
 
+### Office life
+- [x] **Notice board** (`notices` collection): walk up to the board and press E, or use the 📝 button. Everyone reads it; the owner pins new notes (up to 280 characters, four colours), edits them, pins them to the top and takes them down. At most 30 notes per board; the board is deleted with the workspace
+- [x] **Office stats** (📊 button, or from the Workspace panel): coffees made, cat pets and focus time for the whole office, for you and for each teammate
+  - Making a coffee or petting the cat counts it on the server and the toast says the new total ("the office's 12th cup"); repeats within 4 seconds count once
+  - Focus time is counted by the server when you leave **Focusing** (at most 4 hours per session, so a forgotten tab doesn't count all night); a session still running shows up in the stats too
+- [x] **Move furniture** (owner): Settings → *Arrange furniture*. Click a piece to pick it up, click again to put it down (it turns green or red as you move it), Esc puts it back; drag the floor or use WASD / arrows to look around. Desks take their chair with them. *Save layout* saves it for everyone; *Cancel* puts everything back
+  - Pieces must stay inside the walls, off other furniture and off the entrance, and can't box off anything you can use; the server checks the same rules (shared code in `game/layoutEdit.ts`)
+  - Every move says where the piece was, and saves are versioned, so a tab with an older layout can't scramble the office. Changing the floor plan, style or furniture rebuilds the office as before
+
 ### No mock data
 - [x] Removed the demo office, guest user and the `/office-preview` page
 - [x] The office only loads from the server; with no workspace you're sent to onboarding, and with no session you're sent to sign-in
@@ -120,11 +129,11 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] Failed and rejected requests logged with the reason (request bodies hidden for auth routes)
 
 ### Tests
-- [x] `npm test` in `backend/` runs 28 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
-- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting
+- [x] `npm test` in `backend/` runs 33 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
+- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting, the notice board, office stats (coffee/cat counting, focus time and its cap) and moving furniture (owner only, walls, stale moves)
 - [x] Emails are kept in memory during tests (`MAIL_TRANSPORT=memory`), nothing is really sent
 - [x] Uses the same database as the app, but only creates records tagged with a run id (`…@thespace.test`) and deletes exactly those afterwards
-- [x] `npm test` in `frontend/` runs 66 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, and the dashboard dialogs (edit, delete/leave, members)
+- [x] `npm test` in `frontend/` runs 75 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, the dashboard dialogs (edit, delete/leave, members), the notice board (read-only and owner views, add/edit/pin/delete, errors, full board) and the stats panel
 - [x] The 👥 button in the office shows a badge with desk swap requests waiting for you (checked every 30 s and when you come back to the tab), and a toast when a new one arrives
 
 ---
@@ -164,6 +173,13 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 | PATCH | `/api/workspaces/:id/members/:memberId` | Owner: set role (`admin` / `member`) |
 | DELETE | `/api/workspaces/:id/members/:memberId` | Owner/admin: remove a member (they get an email) |
 | PUT | `/api/workspaces/:id/members/:memberId/desk` | Owner/admin: move someone to a desk (swaps if taken) |
+| GET | `/api/workspaces/:id/notices` | The notice board, and whether you may edit it |
+| POST | `/api/workspaces/:id/notices` | Owner: pin a note (`text`, `color`, `pinned`) |
+| PATCH | `/api/workspaces/:id/notices/:noticeId` | Owner: edit a note's text or colour, pin/unpin it |
+| DELETE | `/api/workspaces/:id/notices/:noticeId` | Owner: take a note down |
+| GET | `/api/workspaces/:id/stats` | Coffees, cat pets and focus time: office totals, yours and each member's |
+| POST | `/api/workspaces/:id/me/stats` | Count a `coffee` or a `cat` pet |
+| PUT | `/api/workspaces/:id/office/layout` | Owner: save moved furniture (`moves`: index, kind, from, to) |
 | POST | `/api/workspaces/:id/transfer` | Owner: hand the workspace to another member (they get an email) |
 | GET | `/api/workspaces/invitations/:code` | Check an invitation code |
 | POST | `/api/workspaces/join` | Join with an invitation code |
@@ -182,7 +198,6 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [ ] Forgot / reset password
 - [ ] Change password, name or email
 - [ ] See and sign out of other sessions
-- [ ] Delete account
 
 ### Real-time (multiplayer)
 - [ ] WebSocket server for presence: see who's online and where they are walking
@@ -192,9 +207,9 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [ ] Workspace chat (`messages` collection, per room)
 
 ### Office life
-- [ ] Notice board the owner can edit (`notices` collection)
-- [ ] Small stats: coffees made, focus time, cat pets
-- [ ] Move furniture around and save the layout
+- [x] Notice board the owner can edit (`notices` collection)
+- [x] Small stats: coffees made, focus time, cat pets
+- [x] Move furniture around and save the layout
 
 ### Production
 - [ ] Shared rate limiter (Redis) instead of in-memory

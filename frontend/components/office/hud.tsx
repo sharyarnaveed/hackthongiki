@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Hand, MapPin, Settings2, Users, Volume2, VolumeX } from "lucide-react";
+import { BarChart3, Hand, MapPin, Move, Settings2, StickyNote, Users, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import type { Ref } from "react";
 import { PixelImage, PixelSprite } from "@/components/pixel/PixelArt";
@@ -9,7 +9,7 @@ import { LOGO, PROP_PALETTE } from "@/components/pixel/props";
 import { avatarById, avatarIdle } from "@/components/onboarding/avatars";
 import type { OfficeConfig } from "./config";
 import { MINIMAP } from "./game/camera";
-import type { GameEvents, PlayerStatus } from "./game/events";
+import type { ArrangeState, GameEvents, PlayerStatus } from "./game/events";
 import { TILE } from "./game/tiles";
 
 export type Settings = { sound: boolean; minimap: boolean; nameTag: boolean };
@@ -37,6 +37,8 @@ export function Hud({
   onSound,
   onSettings,
   onMembers,
+  onNotices,
+  onStats,
   swapsWaiting = 0,
 }: {
   config: OfficeConfig;
@@ -51,6 +53,10 @@ export function Hud({
   onSound: () => void;
   onSettings: () => void;
   onMembers: () => void;
+  /** The notice board (shown when given). */
+  onNotices?: () => void;
+  /** Office stats (shown when given). */
+  onStats?: () => void;
   /** Desk swap requests waiting for the viewer's answer, shown as a badge on the members button. */
   swapsWaiting?: number;
 }) {
@@ -97,6 +103,16 @@ export function Hud({
         >
           {settings.sound ? <Volume2 className="size-5" aria-hidden /> : <VolumeX className="size-5" aria-hidden />}
         </button>
+        {onNotices && (
+          <button type="button" onClick={onNotices} aria-label="Notice board" title="Notice board" className={`pointer-events-auto grid size-10 place-items-center ${chip} hover:bg-sun`}>
+            <StickyNote className="size-5" aria-hidden />
+          </button>
+        )}
+        {onStats && (
+          <button type="button" onClick={onStats} aria-label="Office stats" title="Office stats" className={`pointer-events-auto grid size-10 place-items-center ${chip} hover:bg-sun`}>
+            <BarChart3 className="size-5" aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           onClick={onMembers}
@@ -254,5 +270,58 @@ export function Toast({ text }: { text: string }) {
     >
       {text}
     </motion.div>
+  );
+}
+
+/**
+ * Owner's bar while moving furniture: what to do, what's in hand, and
+ * Cancel / Save. Replaces the normal HUD while arranging.
+ */
+export function ArrangeBar({
+  state,
+  saving,
+  error,
+  onCancel,
+  onSave,
+}: {
+  state: ArrangeState;
+  saving: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const hint = state.holding
+    ? state.problem ?? `Click to put the ${state.holding} down here. Esc puts it back.`
+    : "Click a piece of furniture to pick it up. Drag the floor or use WASD / arrow keys to look around.";
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center px-3 sm:top-4">
+      <div role="region" aria-label="Arrange furniture" className={`pointer-events-auto flex w-full max-w-2xl flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center ${chip}`}>
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <Move className="mt-0.5 size-4 shrink-0 text-forest" aria-hidden />
+          <div className="min-w-0">
+            <p className="font-pixel text-[0.6rem] uppercase tracking-widest text-terracotta">
+              Arranging · {state.moved} {state.moved === 1 ? "piece" : "pieces"} moved
+            </p>
+            <p className={`text-sm ${state.holding && state.problem ? "font-semibold text-terracotta" : ""}`} aria-live="polite">
+              {error ?? hint}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button type="button" onClick={onCancel} disabled={saving} className="border-2 border-ink bg-paper px-3 py-1.5 text-sm font-semibold hover:bg-paper-deep disabled:opacity-60">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || state.moved === 0 || !!state.holding}
+            title={state.holding ? "Put down what you're holding first" : undefined}
+            className="border-2 border-ink bg-forest px-3 py-1.5 text-sm font-semibold text-paper disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save layout"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

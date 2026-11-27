@@ -6,9 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObjec
 import { MotionProvider } from "@/components/motion/Motion";
 import { OfficeAudio } from "./audio";
 import { createGame } from "./game/createGame";
-import { GameBus, type GameEvents } from "./game/events";
+import { GameBus, type ArrangeState, type GameEvents } from "./game/events";
 import { seatFor } from "./game/seating";
-import { Hud, PlayerAnchor, Toast, type Settings, type Status } from "./hud";
+import { ArrangeBar, Hud, PlayerAnchor, Toast, type Settings, type Status } from "./hud";
 import { OfficePanel, type OfficeActions, type PanelId } from "./panels";
 import type { LayoutId } from "@/components/onboarding/model";
 import { NoWorkspaceError, prepareOffice, resetPreparedOffice, type PreparedOffice } from "./prepare";
@@ -17,6 +17,10 @@ import { saveProfile, takeDesk } from "@/components/team/service";
 import { ApiError } from "@/lib/api";
 import { LoadingCard } from "./LoadingScreen";
 import { useSwapRequests } from "./useSwapRequests";
+import { countStat, ordinal, saveLayout } from "./lifeService";
+
+/** Actions the office page itself provides; the World adds the ones that need its own state. */
+type PageActions = Omit<OfficeActions, "onArrange" | "onOpen">;
 
 /**
  * The `/office` surface: a full-screen Phaser world with a light React HUD on
@@ -65,7 +69,7 @@ export function OfficeApp() {
     [config, reload],
   );
 
-  const actions = useMemo<OfficeActions>(
+  const actions = useMemo<PageActions>(
     () => ({
       onPlan: (officeLayout: LayoutId, teamSize: string) =>
         rebuild({ officeLayout, teamSize }).catch((err) => {
@@ -116,7 +120,7 @@ function World({
   flushRef,
 }: {
   prepared: PreparedOffice;
-  actions: OfficeActions;
+  actions: PageActions;
   reload: (keepSpot: boolean) => Promise<void>;
   flushRef: MutableRefObject<() => Promise<void>>;
 }) {
@@ -148,6 +152,10 @@ function World({
   const [settings, setSettings] = useState<Settings>({ sound: false, minimap: savedPrefs?.minimap ?? true, nameTag: savedPrefs?.nameTag ?? true });
   const soundOn = useRef(false);
   const workspaceId = config.workspaceId;
+  // Owner's arrange mode: null when not arranging.
+  const [arrange, setArrange] = useState<ArrangeState | null>(null);
+  const [arrangeSaving, setArrangeSaving] = useState(false);
+  const [arrangeError, setArrangeError] = useState<string | null>(null);
 
   /** Save changed settings to the account. */
   const persistPrefs = useCallback((patch: Partial<Settings>) => {
@@ -237,7 +245,15 @@ function World({
     bus.setAnchor((x, y) => {
       if (anchor.current) anchor.current.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     });
-    const off = [bus.on("ready", () => setReady(true)), bus.on("prompt", setPrompt), bus.on("room", setRoom)];
+    const off = [
+      bus.on("ready", () => setReady(true)),
+      bus.on("prompt", setPrompt),
+      bus.on("room", setRoom),
+      bus.on("arrange", (state) => {
+        setArrange((a) => (a ? state : a));
+        setArrangeError(null);
+      }),
+    ];
     return () => {
       cancelAnimationFrame(frame);
       off.forEach((fn) => fn());
@@ -247,6 +263,8 @@ function World({
       setReady(false);
       setPrompt(null);
       setRoom("");
+      setArrange(null);
+      setArrangeSaving(false);
     };
   }, [prepared, bus]);
 
@@ -280,6 +298,50 @@ function World({
     wasMembers.current = panel === "members";
   }, [panel, refreshSwaps]);
 
+  /** Count a coffee or cat pet on the server and say so with the office's new total. */
+  const count = useCallback(
+    (action: "coffee" | "cat", line: (officeTotal: number) => string, fallback: string) => {
+      if (!workspaceId) return say(fallback);
+      countStat(workspaceId, action)
+        .then((r) => say(r.counted ? line(action === "coffee" ? r.office.coffees : r.office.catPets) : fallback))
+        .catch(() => say(fallback));
+    },
+    [workspaceId, say],
+  );
+
+  /** Owner: start moving furniture. */
+  const startArrange = useCallback(() => {
+    setPanel(null);
+    setArrangeError(null);
+    setArrange({ moved: 0, holding: null, problem: null });
+    bus.emit("set-arrange", true);
+  }, [bus]);
+
+  const cancelArrange = useCallback(() => {
+    bus.emit("set-arrange", false);
+    setArrange(null);
+    setArrangeError(null);
+  }, [bus]);
+
+  /** Save the moved furniture for everyone, then load the office again with it. */
+  const saveArrange = useCallback(async () => {
+    const moves = bus.arrangeMoves?.() ?? [];
+    if (!workspaceId || !moves.length) return cancelArrange();
+    setArrangeSaving(true);
+    setArrangeError(null);
+    try {
+      await saveLayout(workspaceId, moves, config.officeSavedAt);
+      bus.emit("arrange-saved");
+      say(`Layout saved — ${moves.length === 1 ? "1 move" : `${moves.length} moves`}. Everyone sees the new arrangement.`);
+      await reload(true);
+    } catch (err) {
+      setArrangeError(err instanceof ApiError ? err.message : "Couldn’t save the layout. Try again.");
+      setArrangeSaving(false);
+    }
+  }, [bus, workspaceId, config.officeSavedAt, cancelArrange, say, reload]);
+
+  const panelActions = useMemo<OfficeActions>(() => ({ ...actions, onArrange: startArrange, onOpen: setPanel }), [actions, startArrange]);
+
   // Interactions coming from the world.
   useEffect(
     () =>
@@ -298,7 +360,11 @@ function World({
             setStatus("break");
             return say("Taking a break. Press E for a breathing exercise, or move to get up.");
           case "coffee":
-            return say("Fresh coffee brewed. Enjoy a little break.");
+            return count("coffee", (n) => `Fresh coffee brewed — the office’s ${ordinal(n)} cup. Enjoy a little break.`, "Fresh coffee brewed. Enjoy a little break.");
+          case "cat":
+            return count("cat", (n) => `Purrr. The office cat has been petted ${n} ${n === 1 ? "time" : "times"} and approves of your work today.`, interaction.flavor ?? "Purrr.");
+          case "notices":
+            return setPanel("notices");
           case "music": {
             const on = !soundOn.current;
             toggleSound(on);
@@ -318,7 +384,7 @@ function World({
           }
         }
       }),
-    [bus, audio, say, toggleSound, workspaceId, reload],
+    [bus, audio, say, toggleSound, workspaceId, reload, count],
   );
 
   // Status: the game sits you at your desk for Focus and gets you up for Available.
@@ -378,21 +444,27 @@ function World({
   return (
     <main className="fixed inset-0 overflow-hidden bg-[#2b2a22] font-display text-ink">
       <div ref={host} className="absolute inset-0 [&_canvas]:block" aria-label={`${config.workspaceName}, an explorable pixel office`} role="application" />
-      <PlayerAnchor ref={anchor} name={config.displayName} status={status} showName={settings.nameTag} prompt={panel ? null : prompt} />
-      <Hud
-        config={config}
-        mapSize={prepared.map}
-        room={room}
-        status={status}
-        onStatus={changeStatus}
-        settings={settings}
-        prompt={panel ? null : prompt}
-        onInteract={() => bus.emit("request-interact")}
-        onSound={() => toggleSound(!settings.sound)}
-        onSettings={() => setPanel("settings")}
-        onMembers={() => setPanel("members")}
-        swapsWaiting={swapsWaiting.length}
-      />
+      <PlayerAnchor ref={anchor} name={config.displayName} status={status} showName={settings.nameTag} prompt={panel || arrange ? null : prompt} />
+      {arrange ? (
+        <ArrangeBar state={arrange} saving={arrangeSaving} error={arrangeError} onCancel={cancelArrange} onSave={saveArrange} />
+      ) : (
+        <Hud
+          config={config}
+          mapSize={prepared.map}
+          room={room}
+          status={status}
+          onStatus={changeStatus}
+          settings={settings}
+          prompt={panel ? null : prompt}
+          onInteract={() => bus.emit("request-interact")}
+          onSound={() => toggleSound(!settings.sound)}
+          onSettings={() => setPanel("settings")}
+          onMembers={() => setPanel("members")}
+          onNotices={() => setPanel("notices")}
+          onStats={() => setPanel("stats")}
+          swapsWaiting={swapsWaiting.length}
+        />
+      )}
       <AnimatePresence>{toast && <Toast key={toast.id} text={toast.text} />}</AnimatePresence>
       <AnimatePresence>
         {panel && (
@@ -404,7 +476,7 @@ function World({
             status={status}
             onStatus={changeStatus}
             settings={settings}
-            actions={actions}
+            actions={panelActions}
             onSettings={(patch) => {
               if (patch.sound !== undefined) setSound(patch.sound);
               setSettings((s) => ({ ...s, ...patch, sound: patch.sound ?? s.sound }));

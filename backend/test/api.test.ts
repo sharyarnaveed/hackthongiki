@@ -18,6 +18,9 @@ import { SessionModel } from "../src/models/Session.ts";
 import { UserModel } from "../src/models/User.ts";
 import { WaitlistModel } from "../src/models/Waitlist.ts";
 import { WorkspaceModel } from "../src/models/Workspace.ts";
+import { NoticeModel } from "../src/models/Notice.ts";
+import { catalog } from "@/components/office/game/furniture";
+import { groupOf, isMovable, placementProblem, unreachable, type FurnitureMeta } from "@/components/office/game/layoutEdit";
 
 assert.equal(process.env.MAIL_TRANSPORT, "memory", "Run with `npm test` so no real emails are sent.");
 
@@ -69,11 +72,13 @@ before(async () => {
 
 after(async () => {
   // Remove only what this run created.
+  const mine = await WorkspaceModel.find({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] }, { _id: 1 });
+  const notices = await NoticeModel.deleteMany({ workspaceId: { $in: mine.map((w) => w._id) } });
   const ws = await WorkspaceModel.deleteMany({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] });
   const sessions = await SessionModel.deleteMany({ userId: { $in: userIds } });
   const users = await UserModel.deleteMany({ email: new RegExp(`\\.${RUN}@thespace\\.test$`) });
   const wl = await WaitlistModel.deleteMany({ email: new RegExp(`\\.${RUN}@thespace\\.test$`) });
-  console.log(`cleanup: ${users.deletedCount} users, ${sessions.deletedCount} sessions, ${ws.deletedCount} workspaces, ${wl.deletedCount} waitlist`);
+  console.log(`cleanup: ${users.deletedCount} users, ${sessions.deletedCount} sessions, ${ws.deletedCount} workspaces, ${notices.deletedCount} notices, ${wl.deletedCount} waitlist`);
   await app.close();
   await mongoose.disconnect();
 });
@@ -513,5 +518,149 @@ describe("desk swap requests", () => {
     assert.equal(r2.status, 201);
     assert.equal((await call("PUT", `${base()}/office/plan`, ann.cookie, { workspaceStyle: "quiet-minimal" })).status, 200);
     assert.equal((await list(ben.cookie)).deskRequests.length, 0, "office rebuild clears requests");
+  });
+});
+
+describe("office life", () => {
+  let owner: Awaited<ReturnType<typeof newUser>>;
+  let mia: Awaited<ReturnType<typeof newUser>>;
+  let id = "";
+  const base = () => `/api/workspaces/${id}`;
+
+  before(async () => {
+    [owner, mia] = [await newUser("lifeowner"), await newUser("mia")];
+    const r = await call("POST", "/api/workspaces", owner.cookie, {
+      displayName: "Oona",
+      avatarId: "buddy-maya",
+      workspaceName: `Test Life ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "6-15",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+      officeFeatures: ["desks", "kitchen", "plants", "seating", "office", "cat"],
+      invitationEmails: [],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    id = r.body.workspaceId;
+    await call("GET", `${base()}/office`, owner.cookie);
+    const j = await call("POST", "/api/workspaces/join", mia.cookie, { displayName: "Mia", avatarId: "buddy-theo", invitationCode: r.body.inviteCode });
+    assert.equal(j.status, 201);
+  });
+
+  it("lets the owner write the notice board and everyone read it", async () => {
+    const empty = await call("GET", `${base()}/notices`, mia.cookie);
+    assert.equal(empty.status, 200);
+    assert.deepEqual(empty.body.notices, []);
+    assert.equal(empty.body.canEdit, false);
+    assert.equal((await call("POST", `${base()}/notices`, mia.cookie, { text: "Hi" })).status, 403, "members only read");
+    assert.equal((await call("POST", `${base()}/notices`, owner.cookie, { text: "   " })).status, 400, "no empty notes");
+
+    const first = await call("POST", `${base()}/notices`, owner.cookie, { text: "Standup at 10:30", color: "sage" });
+    assert.equal(first.status, 201, JSON.stringify(first.body));
+    assert.equal(first.body.notice.authorName, "Oona");
+    const second = await call("POST", `${base()}/notices`, owner.cookie, { text: "Pizza Friday" });
+    assert.equal(second.status, 201);
+    const noteId = first.body.notice.noticeId;
+
+    const pinned = await call("PATCH", `${base()}/notices/${noteId}`, owner.cookie, { pinned: true, text: "Standup at 10:00" });
+    assert.equal(pinned.status, 200);
+    assert.equal(pinned.body.notices[0].noticeId, noteId, "pinned notes come first");
+    assert.equal(pinned.body.notices[0].text, "Standup at 10:00");
+    assert.equal((await call("PATCH", `${base()}/notices/${noteId}`, mia.cookie, { pinned: false })).status, 403);
+
+    const read = await call("GET", `${base()}/notices`, mia.cookie);
+    assert.equal(read.body.notices.length, 2);
+    assert.equal((await call("GET", `${base()}/notices`, owner.cookie)).body.canEdit, true);
+
+    assert.equal((await call("DELETE", `${base()}/notices/${second.body.notice.noticeId}`, mia.cookie)).status, 403);
+    const gone = await call("DELETE", `${base()}/notices/${second.body.notice.noticeId}`, owner.cookie);
+    assert.equal(gone.status, 200);
+    assert.equal(gone.body.notices.length, 1);
+    assert.equal((await call("DELETE", `${base()}/notices/${second.body.notice.noticeId}`, owner.cookie)).status, 404);
+    assert.equal((await call("DELETE", `${base()}/notices/not-an-id`, owner.cookie)).status, 404);
+  });
+
+  it("counts coffees and cat pets, once per few seconds", async () => {
+    const cup = await call("POST", `${base()}/me/stats`, mia.cookie, { action: "coffee" });
+    assert.equal(cup.status, 200, JSON.stringify(cup.body));
+    assert.equal(cup.body.counted, true);
+    assert.equal(cup.body.you.coffees, 1);
+    assert.equal(cup.body.office.coffees, 1);
+    const again = await call("POST", `${base()}/me/stats`, mia.cookie, { action: "coffee" });
+    assert.equal(again.body.counted, false, "mashing E counts once");
+    assert.equal(again.body.office.coffees, 1);
+
+    assert.equal((await call("POST", `${base()}/me/stats`, owner.cookie, { action: "coffee" })).body.office.coffees, 2, "others count too");
+    assert.equal((await call("POST", `${base()}/me/stats`, owner.cookie, { action: "cat" })).body.you.catPets, 1);
+    assert.equal((await call("POST", `${base()}/me/stats`, owner.cookie, { action: "nap" })).status, 400);
+
+    const stats = await call("GET", `${base()}/stats`, mia.cookie);
+    assert.equal(stats.status, 200);
+    assert.deepEqual(stats.body.office, { coffees: 2, catPets: 1, focusMinutes: 0 });
+    assert.equal(stats.body.members.length, 2);
+  });
+
+  it("adds a finished focus session to focus time, capped at 4 hours", async () => {
+    assert.equal((await call("PATCH", `${base()}/me/status`, mia.cookie, { status: "focusing" })).status, 200);
+    // Pretend Mia started focusing 25 minutes ago.
+    const ws = (await WorkspaceModel.findById(id))!;
+    const miaId = ws.members.find((m) => m.displayName === "Mia")!._id;
+    await WorkspaceModel.updateOne({ _id: id, "members._id": miaId }, { $set: { "members.$.statusUpdatedAt": new Date(Date.now() - 25 * 60000) } });
+    const running = await call("GET", `${base()}/stats`, mia.cookie);
+    assert.equal(running.body.you.focusMinutes, 25, "a running session counts");
+    assert.equal(running.body.you.focusing, true);
+
+    await call("PATCH", `${base()}/me/status`, mia.cookie, { status: "available" });
+    const done = await call("GET", `${base()}/stats`, owner.cookie);
+    assert.equal(done.body.members.find((m: any) => m.displayName === "Mia").focusMinutes, 25);
+    assert.equal(done.body.office.focusMinutes, 25);
+
+    await call("PATCH", `${base()}/me/status`, mia.cookie, { status: "focusing" });
+    await WorkspaceModel.updateOne({ _id: id, "members._id": miaId }, { $set: { "members.$.statusUpdatedAt": new Date(Date.now() - 20 * 3600000) } });
+    await call("PATCH", `${base()}/me/status`, mia.cookie, { status: "break" });
+    assert.equal((await call("GET", `${base()}/stats`, mia.cookie)).body.you.focusMinutes, 25 + 240, "a forgotten tab counts 4 hours at most");
+  });
+
+  it("lets the owner move furniture, with the same rules as the office", async () => {
+    const before = (await call("GET", `${base()}/office`, owner.cookie)).body;
+    const office = before.office;
+    const meta: FurnitureMeta = { rug: { footprint: null, layer: "floor" }, sign: { footprint: null, layer: "wall" } };
+    for (const [kind, def] of Object.entries(catalog(office.theme))) meta[kind] = { footprint: def.footprint, layer: def.layer };
+
+    // A plant (one piece, no companions) and a free floor tile it can go to.
+    const index = office.objects.findIndex((o: any, i: number) => (o.kind === "plant" || o.kind === "small-plant") && isMovable(o, meta) && groupOf(office.objects, i).length === 1);
+    assert.ok(index >= 0, "the office has a plant");
+    const plant = office.objects[index];
+    let to: { tx: number; ty: number } | null = null;
+    for (let ty = 2; ty < office.height - 1 && !to; ty++) {
+      for (let tx = 1; tx < office.width - 1 && !to; tx++) {
+        if (tx === plant.tx && ty === plant.ty) continue;
+        const objects = office.objects.map((o: any, i: number) => (i === index ? { ...o, tx, ty } : o));
+        const floor = { ...office, objects };
+        if (!placementProblem(floor, [index], meta) && unreachable(floor, meta).length === unreachable(office, meta).length) to = { tx, ty };
+      }
+    }
+    assert.ok(to, "there is somewhere to put the plant");
+    const move = { index, kind: plant.kind, from: { tx: plant.tx, ty: plant.ty }, to };
+
+    assert.equal((await call("PUT", `${base()}/office/layout`, mia.cookie, { moves: [move] })).status, 403, "only the owner");
+    const wall = await call("PUT", `${base()}/office/layout`, owner.cookie, { moves: [{ ...move, to: { tx: 0, ty: 0 } }] });
+    assert.equal(wall.status, 400, "not into the walls");
+    const wrong = await call("PUT", `${base()}/office/layout`, owner.cookie, { moves: [{ ...move, from: { tx: plant.tx + 1, ty: plant.ty } }] });
+    assert.equal(wrong.status, 409, "a move must match the saved layout");
+    const old = await call("PUT", `${base()}/office/layout`, owner.cookie, { moves: [move], officeSavedAt: new Date(0).toISOString() });
+    assert.equal(old.status, 409, "not for an older office");
+
+    const ok = await call("PUT", `${base()}/office/layout`, owner.cookie, { moves: [move], officeSavedAt: before.savedAt });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.moved, 1);
+    const after = (await call("GET", `${base()}/office`, mia.cookie)).body.office.objects[index];
+    assert.deepEqual({ tx: after.tx, ty: after.ty }, to, "everyone sees the new spot");
+    assert.equal((await call("PUT", `${base()}/office/layout`, owner.cookie, { moves: [move] })).status, 409, "the same move twice is stale");
+  });
+
+  it("deletes the board with the workspace", async () => {
+    assert.equal((await call("DELETE", base(), owner.cookie)).status, 200);
+    assert.equal(await NoticeModel.countDocuments({ workspaceId: id }), 0);
   });
 });

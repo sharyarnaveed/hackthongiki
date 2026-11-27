@@ -1,6 +1,16 @@
 import { Schema, Types, model, type InferSchemaType } from "mongoose";
 import { DEFAULT_STATUS, STATUSES } from "../lib/status.ts";
 
+/** Small office-life counters: cups of coffee, cat pets and time spent focusing. */
+const statsSchema = new Schema(
+  {
+    coffees: { type: Number, default: 0 },
+    catPets: { type: Number, default: 0 },
+    focusMs: { type: Number, default: 0 },
+  },
+  { _id: false },
+);
+
 const memberSchema = new Schema(
   {
     userId: { type: Types.ObjectId, ref: "User", required: true },
@@ -20,6 +30,7 @@ const memberSchema = new Schema(
       type: new Schema({ x: Number, y: Number, savedAt: Date }, { _id: false }),
       default: null,
     },
+    stats: { type: statsSchema, default: () => ({}) },
   },
   { _id: true },
 );
@@ -70,6 +81,11 @@ const workspaceSchema = new Schema(
     // client built it, so every visit shows the same placement. Null until first opened.
     office: { type: Schema.Types.Mixed, default: null },
     officeSavedAt: { type: Date },
+    // Bumped every time the owner moves furniture, so two tabs can't overwrite each other's layout.
+    layoutVersion: { type: Number, default: 0 },
+    layoutSavedAt: { type: Date },
+    // Totals for the whole office (members who leave still count).
+    stats: { type: statsSchema, default: () => ({}) },
   },
   { timestamps: true, collection: "workspaces" },
 );

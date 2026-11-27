@@ -38,6 +38,9 @@ import { WorkspaceModel } from "../models/Workspace.ts";
 import { teamRoutes } from "./team.ts";
 import { deskRequestRoutes } from "./deskRequests.ts";
 import { deskRequestsView, staleRequests } from "../lib/deskRequests.ts";
+import { focusSession } from "../lib/stats.ts";
+import { officeLifeRoutes } from "./officeLife.ts";
+import { NoticeModel } from "../models/Notice.ts";
 
 type CreateBody = {
   displayName: string;
@@ -73,6 +76,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   // Invite code, invitations and member management (owners and admins).
   await app.register(teamRoutes);
   await app.register(deskRequestRoutes);
+  // Notice board, office stats and moving furniture.
+  await app.register(officeLifeRoutes);
 
   /** Workspaces the signed-in user belongs to (used to skip onboarding for returning users). */
   app.get("/mine", async (req) => {
@@ -368,7 +373,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const { ws, me } = found;
     if (me.role === "owner") {
       await WorkspaceModel.deleteOne({ _id: ws._id });
-      req.log.info({ id: ws.id, name: ws.name, user: req.user!.email, members: ws.members.length }, "🗑️  Workspace deleted");
+      const notices = await NoticeModel.deleteMany({ workspaceId: ws._id });
+      req.log.info({ id: ws.id, name: ws.name, user: req.user!.email, members: ws.members.length, notices: notices.deletedCount }, "🗑️  Workspace deleted");
       return reply.send({ deleted: true });
     }
     await WorkspaceModel.updateOne({ _id: ws._id }, { $pull: { members: { userId: me.userId } } });
@@ -526,11 +532,19 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       const { ws, me } = found;
       if (me.status === req.body.status) return reply.send({ status: me.status, statusUpdatedAt: me.statusUpdatedAt });
       const now = new Date();
+      // Leaving Focusing adds the session to your focus time and the office's.
+      const focusMs = focusSession(me, now);
       await WorkspaceModel.updateOne(
         { _id: ws._id, "members._id": me._id },
-        { $set: { "members.$.status": req.body.status, "members.$.statusUpdatedAt": now } },
+        {
+          $set: { "members.$.status": req.body.status, "members.$.statusUpdatedAt": now },
+          ...(focusMs ? { $inc: { "members.$.stats.focusMs": focusMs, "stats.focusMs": focusMs } } : {}),
+        },
       );
-      req.log.info({ id: ws.id, member: me.displayName, from: me.status, to: req.body.status }, "🟢 Status saved to MongoDB");
+      req.log.info(
+        { id: ws.id, member: me.displayName, from: me.status, to: req.body.status, ...(focusMs ? { focusedMinutes: Math.round(focusMs / 60000) } : {}) },
+        "🟢 Status saved to MongoDB",
+      );
       return reply.send({ status: req.body.status, statusUpdatedAt: now });
     },
   );

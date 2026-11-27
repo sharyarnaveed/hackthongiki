@@ -15,8 +15,10 @@ import { PlanPicker } from "@/components/onboarding/PlanPicker";
 import { STATUS_DOT, STATUS_LABEL, officeBadge, type Settings, type Status } from "./hud";
 import { TeamPanel, type TeamChange } from "@/components/team/TeamPanel";
 import { LookForm, ProfileForm } from "./SettingsForms";
+import { NoticeBoard } from "./NoticeBoard";
+import { OfficeStats } from "./OfficeStats";
 
-export type PanelId = "desk" | "workspace" | "meeting" | "break" | "settings" | "members";
+export type PanelId = "desk" | "workspace" | "meeting" | "break" | "settings" | "members" | "notices" | "stats";
 
 const TITLES: Record<PanelId, string> = {
   desk: "Your desk",
@@ -25,6 +27,8 @@ const TITLES: Record<PanelId, string> = {
   break: "Break time",
   settings: "Settings",
   members: "Members",
+  notices: "Notice board",
+  stats: "Office stats",
 };
 
 /** What the settings and members panels can change; each returns once the office has reloaded. */
@@ -33,6 +37,10 @@ export type OfficeActions = {
   onLook: (change: { workspaceStyle?: string; officeFeatures?: string[] }) => Promise<void>;
   onProfile: (patch: { displayName?: string; avatarId?: string }) => Promise<void>;
   onTeam: (what: TeamChange) => void;
+  /** Owner: close the panel and start moving furniture. */
+  onArrange: () => void;
+  /** Open another panel (e.g. the notice board from the workspace panel). */
+  onOpen: (id: PanelId) => void;
 };
 
 export function OfficePanel({
@@ -62,7 +70,9 @@ export function OfficePanel({
 
   let body: ReactNode;
   if (id === "desk") body = <Desk config={config} status={status} onStatus={onStatus} />;
-  else if (id === "workspace") body = <Workspace config={config} seats={seats} />;
+  else if (id === "workspace") body = <Workspace config={config} seats={seats} onOpen={actions.onOpen} />;
+  else if (id === "notices") body = config.workspaceId ? <NoticeBoard workspaceId={config.workspaceId} /> : null;
+  else if (id === "stats") body = config.workspaceId ? <OfficeStats workspaceId={config.workspaceId} /> : null;
   else if (id === "meeting") body = <Meeting />;
   else if (id === "break") body = <Break />;
   else if (id === "members") body = config.workspaceId ? <TeamPanel workspaceId={config.workspaceId} onChange={actions.onTeam} /> : null;
@@ -145,7 +155,7 @@ function Desk({ config, status, onStatus }: { config: OfficeConfig; status: Stat
   );
 }
 
-function Workspace({ config, seats }: { config: OfficeConfig; seats: Seat[] }) {
+function Workspace({ config, seats, onOpen }: { config: OfficeConfig; seats: Seat[]; onOpen: (id: PanelId) => void }) {
   const rows: [string, string | undefined][] = [
     ["Name", config.workspaceName],
     ["About", config.workspaceDescription || undefined],
@@ -182,6 +192,14 @@ function Workspace({ config, seats }: { config: OfficeConfig; seats: Seat[] }) {
         </ol>
         {config.teammates.length > 0 && <p className="mt-1.5 text-xs text-muted">Invited teammates’ desks are saved until they join.</p>}
       </section>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" onClick={() => onOpen("notices")} className="border-2 border-ink bg-paper px-3 py-2 font-semibold hover:bg-paper-deep">
+          Read the notice board
+        </button>
+        <button type="button" onClick={() => onOpen("stats")} className="border-2 border-ink bg-paper px-3 py-2 font-semibold hover:bg-paper-deep">
+          Office stats
+        </button>
+      </div>
       <Note>Every desk and plant is saved with your workspace, so the office looks the same each time you come back.</Note>
       <p className="font-pixel text-[0.6rem] uppercase tracking-widest text-terracotta">{officeBadge(config)}</p>
     </>
@@ -244,6 +262,17 @@ function SettingsBody({
         />
       ) : (
         <Note>Only the workspace owner can change the floor plan, style and furniture.</Note>
+      )}
+      {config.role === "owner" && (
+        <section aria-labelledby="arrange-title" className="flex flex-col gap-2">
+          <h3 id="arrange-title" className="font-semibold">
+            Move furniture
+          </h3>
+          <p className="text-muted">Pick pieces up and put them somewhere else. The new layout is saved for everyone.</p>
+          <button type="button" onClick={actions.onArrange} className="self-start border-2 border-ink bg-sun px-3 py-2 font-semibold hover:-translate-y-0.5">
+            Arrange furniture
+          </button>
+        </section>
       )}
       {config.role === "owner" && <LookForm key={`${config.workspaceStyle}|${config.features?.join()}`} config={config} onSave={actions.onLook} />}
       <ProfileForm key={`${config.displayName}|${config.avatarId}`} config={config} onSave={actions.onProfile} />

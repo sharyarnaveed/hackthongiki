@@ -2,8 +2,9 @@ import type * as P from "phaser";
 import type { PreparedOffice } from "../prepare";
 import { plateKey, rugKey, type Sheet } from "./assets";
 import { onResize, setupCamera, setupMinimap } from "./camera";
-import type { GameBus } from "./events";
+import type { ArrangeState, GameBus } from "./events";
 import { INTERACTIONS, type Interaction, type InteractionId } from "./interactions";
+import { blocksTheWay, groupOf, isMovable, kindLabel, placementProblem, type FurnitureMeta, type FurnitureMove, type LayoutFloor } from "./layoutEdit";
 import type { PlacedObject } from "./map";
 import { PlayerController, createAvatarAnims, type SeatPose } from "./player";
 import { seatFor, seatInteraction } from "./seating";
@@ -30,6 +31,26 @@ const POSES: Partial<Record<PlacedObject["kind"], SeatPose>> = { "sofa-back": "b
 /** How close (px) the player's feet must be to an object's footprint to interact. */
 const REACH = 12;
 
+/** Arrange mode: camera pan speed with the keys (world px/s) and how far a press may drift before it counts as a drag. */
+const PAN_SPEED = 220;
+const DRAG_SLOP = 6;
+const TINT = { hover: 0xfff1a8, ok: 0xb9f0a8, bad: 0xff9a8a } as const;
+
+/** Something drawn for an object, and where it was drawn for the saved layout. */
+type Visual = { obj: P.GameObjects.Image | P.GameObjects.Sprite; x: number; y: number; depth: number; sorted: boolean };
+
+/** A piece (with its companions) picked up in arrange mode. */
+interface Held {
+  group: number[];
+  /** Where each piece of the group was when picked up. */
+  from: { tx: number; ty: number }[];
+  /** Pointer tile minus the lead piece's tile when picked up, so it doesn't jump under the cursor. */
+  grab: { dx: number; dy: number };
+  /** The lead piece's tile last checked, so pointer moves within a tile don't re-check. */
+  spot: string;
+  problem: string | null;
+}
+
 /** The Phaser scene class is built at runtime because Phaser is loaded lazily. */
 export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
   return class OfficeScene extends Phaser.Scene {
@@ -45,6 +66,18 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
     private puffs: P.GameObjects.Image[] = [];
     private coffeeAt = { x: 0, y: 0 };
     private cleanup: (() => void)[] = [];
+
+    /* Arrange mode (owner): pick furniture up and put it down elsewhere. */
+    private arranging = false;
+    /** Objects as currently arranged (positions change; the saved map stays as loaded). */
+    private working: PlacedObject[] = [];
+    private visuals = new Map<number, Visual[]>();
+    private held: Held | null = null;
+    private hovered: number | null = null;
+    private press: { x: number; y: number; scrollX: number; scrollY: number; dragging: boolean } | null = null;
+    private panKeys: Record<"up" | "down" | "left" | "right", P.Input.Keyboard.Key[]> | null = null;
+    /** Shown only outside arrange mode: they belong to the saved layout. */
+    private layoutOnly: P.GameObjects.GameObject[] = [];
 
     constructor() {
       super("office");
@@ -69,11 +102,12 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       const blocked = tilemap.createBlankLayer("collision", tileset)!.setVisible(false);
       map.walls.forEach((row, y) => row.forEach((w, x) => w && blocked.putTileAt(T.BLOCK, x, y)));
 
-      for (const o of map.objects) this.placeObject(o, blocked, reducedMotion);
+      map.objects.forEach((o, i) => this.placeObject(o, i, blocked, reducedMotion));
+      this.working = map.objects.map((o) => ({ ...o }));
       blocked.setCollision(T.BLOCK);
       // Shadows and light pools sit over the floor and rugs, under everything standing on it.
       this.textures.addCanvas("lighting", art.lighting);
-      this.add.image(0, 0, "lighting").setOrigin(0).setDepth(1.5);
+      this.layoutOnly.push(this.add.image(0, 0, "lighting").setOrigin(0).setDepth(1.5));
 
       // Player
       createAvatarAnims(this);
@@ -99,6 +133,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         if (!reducedMotion) this.tweens.add({ targets: arrow, y: arrow.y - 3, duration: 600, yoyo: true, repeat: -1, ease: "Sine.inOut" });
         cam.ignore(deskMarker);
         mini.ignore(arrow);
+        this.layoutOnly.push(deskMarker, arrow);
       }
       this.events.on("postupdate", () => marker.setPosition(this.player.sprite.x, this.player.sprite.y - 8));
       this.events.on("render", () => this.emitAnchor());
@@ -109,10 +144,24 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
 
       // Keyboard interaction and the UI bridge.
       this.input.keyboard!.on("keydown-E", () => this.interact());
+      this.input.keyboard!.on("keydown-ESC", () => this.held && this.putBack());
+      const kb = this.input.keyboard!;
+      this.panKeys = {
+        up: [kb.addKey("W"), kb.addKey("UP")],
+        down: [kb.addKey("S"), kb.addKey("DOWN")],
+        left: [kb.addKey("A"), kb.addKey("LEFT")],
+        right: [kb.addKey("D"), kb.addKey("RIGHT")],
+      };
+      this.input.on("pointerdown", (p: P.Input.Pointer) => this.onPointerDown(p));
+      this.input.on("pointermove", (p: P.Input.Pointer) => this.onPointerMove(p));
+      this.input.on("pointerup", (p: P.Input.Pointer) => this.onPointerUp(p));
+      bus.arrangeMoves = () => this.moves();
       this.cleanup.push(
         bus.on("request-interact", () => this.interact()),
         bus.on("set-paused", (p) => this.setPaused(p)),
         bus.on("set-minimap", (on) => mini.setVisible(on)),
+        bus.on("set-arrange", (on) => this.setArranging(on)),
+        bus.on("arrange-saved", () => this.endArranging(false)),
         bus.on("set-status", (status) => {
           if (status === "focusing") this.goToDesk();
           else if (status === "available") this.player.standUp();
@@ -122,6 +171,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       // Destroying the game fires "destroy" (not "shutdown"), so unsubscribe on both.
       const teardown = () => {
         if (bus.positionOf) bus.positionOf = null;
+        bus.arrangeMoves = null;
         this.cleanup.forEach((fn) => fn());
         this.cleanup = [];
       };
@@ -144,7 +194,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       add("avatar", avatar);
     }
 
-    private placeObject(o: PlacedObject, blocked: P.Tilemaps.TilemapLayer, reducedMotion: boolean) {
+    private placeObject(o: PlacedObject, index: number, blocked: P.Tilemaps.TilemapLayer, reducedMotion: boolean) {
       const { art } = this.data_.prepared;
       const meta = art.meta[o.kind];
       const key = o.kind === "rug" ? rugKey(o.w!, o.h!) : o.kind;
@@ -164,6 +214,8 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       } else {
         img = this.add.sprite(x, bottom, key, o.frame ?? 0).setOrigin(0, 1).setDepth(bottom);
       }
+      const drawn: Visual[] = [{ obj: img, x: img.x, y: img.y, depth: img.depth, sorted: meta.layer === "sort" }];
+      this.visuals.set(index, drawn);
       if (this.anims.exists(key) && !reducedMotion) {
         img.play({ key, startFrame: (o.tx + o.ty) % sheet.count });
       }
@@ -175,7 +227,8 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       let interaction: Interaction | undefined = o.interact && INTERACTIONS[o.interact];
       if (o.desk !== undefined && this.textures.exists(plateKey(o.desk))) {
         const cx = o.tx * TILE + TILE;
-        this.add.image(cx, bottom - 1, plateKey(o.desk)).setOrigin(0.5, 1).setDepth(bottom + 0.5);
+        const plate = this.add.image(cx, bottom - 1, plateKey(o.desk)).setOrigin(0.5, 1).setDepth(bottom + 0.5);
+        drawn.push({ obj: plate, x: plate.x, y: plate.y, depth: plate.depth, sorted: true });
         const seat = seatFor(this.data_.prepared.config, o.desk);
         interaction = seatInteraction(seat);
         // Your desk is the one saved for you (desk 1 in offices built on this device).
@@ -258,6 +311,227 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       });
     }
 
+    /* ------------------------------ Arrange mode ----------------------------- */
+
+    private get meta() {
+      return this.data_.prepared.art.meta as FurnitureMeta;
+    }
+
+    private floor(objects: PlacedObject[]): LayoutFloor {
+      const { map } = this.data_.prepared;
+      return { width: map.width, height: map.height, walls: map.walls, spawn: map.spawn, objects };
+    }
+
+    private setArranging(on: boolean) {
+      if (on === this.arranging) return;
+      if (!on) return this.endArranging(true);
+      this.arranging = true;
+      this.current = null;
+      this.data_.bus.emit("prompt", null);
+      this.cameras.main.stopFollow();
+      // Light pools and the desk arrow belong to the saved layout; hide them while things move.
+      this.layoutOnly.forEach((o) => (o as P.GameObjects.Image).setVisible(false));
+      this.input.keyboard?.enableGlobalCapture();
+      this.report(null);
+    }
+
+    /** Leave arrange mode; `restore` puts every unsaved move back. */
+    private endArranging(restore: boolean) {
+      if (!this.arranging) return;
+      this.held = null;
+      this.press = null;
+      this.setHover(null);
+      if (restore) {
+        this.working = this.data_.prepared.map.objects.map((o) => ({ ...o }));
+        this.visuals.forEach((_, i) => this.sync(i));
+        this.layoutOnly.forEach((o) => (o as P.GameObjects.Image).setVisible(true));
+      }
+      this.arranging = false;
+      this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
+      this.report(null);
+    }
+
+    /** Furniture that differs from the saved layout. */
+    private moves(): FurnitureMove[] {
+      const saved = this.data_.prepared.map.objects;
+      return this.working.flatMap((o, index) => {
+        const s = saved[index];
+        return s.tx === o.tx && s.ty === o.ty ? [] : [{ index, kind: o.kind, from: { tx: s.tx, ty: s.ty }, to: { tx: o.tx, ty: o.ty } }];
+      });
+    }
+
+    private report(problem: string | null) {
+      // Count pieces the owner moved, not the chairs that came along with desks.
+      const moved = new Set(this.moves().map((m) => groupOf(this.working, m.index)[0])).size;
+      const holding = this.held ? kindLabel(this.working[this.held.group[0]].kind) : null;
+      const state: ArrangeState = { moved, holding, problem };
+      this.data_.bus.emit("arrange", state);
+    }
+
+    /** Draw object `i` where `working` says it is now. */
+    private sync(i: number) {
+      const saved = this.data_.prepared.map.objects[i];
+      const now = this.working[i];
+      const dx = (now.tx - saved.tx) * TILE;
+      const dy = (now.ty - saved.ty) * TILE;
+      for (const v of this.visuals.get(i) ?? []) {
+        v.obj.setPosition(v.x + dx, v.y + dy);
+        if (v.sorted) v.obj.setDepth(v.depth + dy);
+      }
+    }
+
+    private tint(group: number[], color: number | null) {
+      for (const i of group) {
+        for (const v of this.visuals.get(i) ?? []) {
+          if (color === null) v.obj.clearTint();
+          else v.obj.setTint(color);
+        }
+      }
+    }
+
+    private setHover(i: number | null) {
+      if (i === this.hovered) return;
+      if (this.hovered !== null) this.tint(groupOf(this.working, this.hovered), null);
+      this.hovered = i;
+      if (i !== null) this.tint(groupOf(this.working, i), TINT.hover);
+    }
+
+    private worldAt(p: { x: number; y: number }) {
+      return this.cameras.main.getWorldPoint(p.x, p.y);
+    }
+
+    private pointerTile() {
+      const w = this.worldAt(this.input.activePointer);
+      return { tx: Math.floor(w.x / TILE), ty: Math.floor(w.y / TILE) };
+    }
+
+    /** The movable piece drawn under a screen point (the one in front wins). */
+    private pieceAt(p: { x: number; y: number }): number | null {
+      const w = this.worldAt(p);
+      let best: number | null = null;
+      let bestDepth = -Infinity;
+      for (const [i, vs] of this.visuals) {
+        const img = vs[0].obj;
+        if (!isMovable(this.working[i], this.meta) || !img.getBounds().contains(w.x, w.y)) continue;
+        if (img.depth > bestDepth) {
+          best = i;
+          bestDepth = img.depth;
+        }
+      }
+      return best;
+    }
+
+    private pickUp(i: number, at: { tx: number; ty: number }) {
+      const group = groupOf(this.working, i);
+      const lead = this.working[group[0]];
+      this.setHover(null);
+      this.held = {
+        group,
+        from: group.map((g) => ({ tx: this.working[g].tx, ty: this.working[g].ty })),
+        grab: { dx: at.tx - lead.tx, dy: at.ty - lead.ty },
+        spot: "",
+        problem: null,
+      };
+      this.follow(at);
+    }
+
+    /** Move what's in hand so the lead piece sits under tile `at` (keeping the grab offset), and check the spot. */
+    private follow(at: { tx: number; ty: number }) {
+      const held = this.held;
+      if (!held) return;
+      const lead = held.from[0];
+      const tx = at.tx - held.grab.dx;
+      const ty = at.ty - held.grab.dy;
+      if (held.spot === `${tx},${ty}`) return;
+      held.spot = `${tx},${ty}`;
+      const dx = tx - lead.tx;
+      const dy = ty - lead.ty;
+      held.group.forEach((g, k) => {
+        this.working[g] = { ...this.working[g], tx: held.from[k].tx + dx, ty: held.from[k].ty + dy };
+        this.sync(g);
+      });
+      held.problem = this.problemHere(held.group);
+      this.tint(held.group, held.problem ? TINT.bad : TINT.ok);
+      this.report(held.problem);
+    }
+
+    private problemHere(group: number[]) {
+      const next = this.floor(this.working);
+      return placementProblem(next, group, this.meta) ?? blocksTheWay(this.floor(this.data_.prepared.map.objects), next, this.meta);
+    }
+
+    /** Put what's in hand down here, if the spot is fine. */
+    private drop() {
+      const held = this.held;
+      if (!held) return;
+      if (held.problem) return this.report(held.problem);
+      this.tint(held.group, null);
+      this.held = null;
+      this.report(null);
+    }
+
+    /** Escape: return what's in hand to where it was picked up. */
+    private putBack() {
+      const held = this.held;
+      if (!held) return;
+      held.group.forEach((g, k) => {
+        this.working[g] = { ...this.working[g], ...held.from[k] };
+        this.sync(g);
+      });
+      this.tint(held.group, null);
+      this.held = null;
+      this.report(null);
+    }
+
+    private onPointerDown(p: P.Input.Pointer) {
+      if (!this.arranging || this.paused) return;
+      const cam = this.cameras.main;
+      this.press = { x: p.x, y: p.y, scrollX: cam.scrollX, scrollY: cam.scrollY, dragging: false };
+    }
+
+    private onPointerMove(p: P.Input.Pointer) {
+      if (!this.arranging || this.paused) return;
+      const press = this.press;
+      // Dragging empty floor pans the camera (handy on touch screens).
+      if (press && p.isDown && !this.held) {
+        if (!press.dragging && Math.hypot(p.x - press.x, p.y - press.y) > DRAG_SLOP) press.dragging = true;
+        if (press.dragging) {
+          const cam = this.cameras.main;
+          cam.setScroll(press.scrollX - (p.x - press.x) / cam.zoom, press.scrollY - (p.y - press.y) / cam.zoom);
+        }
+        return;
+      }
+      if (this.held) return this.follow(this.pointerTile());
+      this.setHover(this.pieceAt(p));
+    }
+
+    private onPointerUp(p: P.Input.Pointer) {
+      if (!this.arranging || this.paused) return;
+      const dragged = this.press?.dragging;
+      this.press = null;
+      if (dragged) return;
+      if (this.held) {
+        this.follow(this.pointerTile());
+        return this.drop();
+      }
+      const i = this.pieceAt(p);
+      if (i !== null) this.pickUp(i, this.pointerTile());
+    }
+
+    /** Arrow keys / WASD move the camera instead of the avatar while arranging. */
+    private pan(delta: number) {
+      const keys = this.panKeys;
+      if (!keys || this.paused) return;
+      const held = (d: keyof typeof keys) => keys[d].some((k) => k.isDown);
+      const dx = (held("right") ? 1 : 0) - (held("left") ? 1 : 0);
+      const dy = (held("down") ? 1 : 0) - (held("up") ? 1 : 0);
+      if (!dx && !dy) return;
+      const cam = this.cameras.main;
+      const step = (PAN_SPEED * delta) / 1000;
+      cam.setScroll(cam.scrollX + dx * step, cam.scrollY + dy * step);
+      if (this.held) this.follow(this.pointerTile());
+    }
+
     /** Nearest interactive object within reach of the player's feet. */
     private nearest(px: number, py: number): Target | null {
       let best: Target | null = null;
@@ -274,8 +548,13 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       return best;
     }
 
-    update() {
+    update(_time: number, delta: number) {
       const { bus, prepared } = this.data_;
+      if (this.arranging) {
+        this.player.update(false);
+        this.pan(delta);
+        return;
+      }
       if (this.player.update(!this.paused)) bus.emit("stood");
       const { x, y } = this.player.feet;
 
