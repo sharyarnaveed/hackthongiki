@@ -32,6 +32,9 @@ export interface Link {
  * member id sends the offer. `reconcile` opens and closes links to match what
  * should exist. Links that don't connect quickly are dropped and retried
  * later — the server relay covers that pair in the meantime.
+ *
+ * With `listenOnly`, links also open without a local stream (mic off): that side
+ * only receives, so you can hear a nearby speaker without turning your mic on.
  */
 export class Mesh {
   readonly links = new Map<string, Link>();
@@ -45,6 +48,7 @@ export class Mesh {
     private prefix: "prox" | "call",
     /** Called when a link opens, connects, closes or gets remote media. */
     private onChange: () => void,
+    private listenOnly = false,
   ) {
     this.off = live.on((msg) => {
       if (msg.t === "signal" && msg.link.startsWith(`${prefix}:`)) void this.onSignal(msg.from, msg.link, msg.data);
@@ -65,7 +69,7 @@ export class Mesh {
     this.wanted = wanted;
     for (const id of [...this.links.keys()]) if (!wanted.has(id)) this.drop(id, true);
     const me = this.live.me;
-    if (!this.local || !me || !DIRECT_ENABLED) return;
+    if (!this.canLink || !me || !DIRECT_ENABLED) return;
     const now = Date.now();
     for (const [id, link] of [...this.links]) {
       if (link.pc.connectionState !== "connected" && now - link.openedAt > CONNECT_TIMEOUT_MS) this.fail(id);
@@ -76,16 +80,24 @@ export class Mesh {
     }
   }
 
+  /** Whether we can take part in a link right now (sending, or just listening). */
+  private get canLink() {
+    return !!this.local || this.listenOnly;
+  }
+
   private fail(id: string) {
     this.failed.set(id, Date.now());
     this.drop(id, true);
   }
 
-  private open(id: string, peer: string): Link {
+  private open(id: string, peer: string, offering: boolean): Link {
     const pc = new RTCPeerConnection({ iceServers: ICE });
     const link: Link = { id, peer, pc, remote: null, pending: [], openedAt: Date.now() };
     this.links.set(id, link);
-    this.local?.getTracks().forEach((t) => pc.addTrack(t, this.local!));
+    if (this.local) this.local.getTracks().forEach((t) => pc.addTrack(t, this.local!));
+    // Mic off and we make the offer: ask for the other side's audio without sending any.
+    // (When answering, the offer's own audio line is used instead.)
+    else if (offering) pc.addTransceiver("audio", { direction: "recvonly" });
     pc.onicecandidate = (e) => {
       const c = e.candidate;
       if (c) this.signal(peer, id, { kind: "ice", candidate: { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex } });
@@ -104,7 +116,7 @@ export class Mesh {
   }
 
   private async call(id: string, peer: string) {
-    const link = this.open(id, peer);
+    const link = this.open(id, peer, true);
     try {
       const offer = await link.pc.createOffer();
       await link.pc.setLocalDescription(offer);
@@ -121,9 +133,9 @@ export class Mesh {
     try {
       if (data.kind === "offer") {
         // Only answer people we'd connect to ourselves (nearby, or in the same call).
-        if (!this.local || this.wanted.get(id) !== from) return;
+        if (!this.canLink || this.wanted.get(id) !== from) return;
         if (link) this.drop(id, false);
-        link = this.open(id, from);
+        link = this.open(id, from, false);
         await link.pc.setRemoteDescription({ type: "offer", sdp: data.sdp });
         await this.flush(link);
         const answer = await link.pc.createAnswer();
@@ -165,6 +177,11 @@ export class Mesh {
   /** Links that are connected and carrying the other side's media. */
   connected() {
     return [...this.links.values()].filter((l) => l.pc.connectionState === "connected" && l.remote);
+  }
+
+  /** Links that are connected at all (we may only be sending, to a listener with the mic off). */
+  reached() {
+    return [...this.links.values()].filter((l) => l.pc.connectionState === "connected");
   }
 
   dispose() {

@@ -127,8 +127,8 @@ export function Hud({
               live.voiceOn
                 ? live.talkingWith.length
                   ? `Talking with ${live.talkingWith.join(", ")}`
-                  : "Mic on — walk up to someone with their mic on to talk"
-                : "Proximity voice: talk to people standing near you"
+                  : "Mic on — anyone standing near you can hear you"
+                : "Mic off — you still hear people talking near you. Turn it on to talk back"
             }
             className={`pointer-events-auto relative grid size-10 place-items-center ${chip} ${live.voiceOn ? "bg-sage" : ""} hover:bg-sun`}
           >

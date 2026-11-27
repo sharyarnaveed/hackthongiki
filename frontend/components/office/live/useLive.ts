@@ -157,8 +157,9 @@ function syncDirect(live: LiveClient, media: Media) {
 const isDirect = (media: Media, id: string) => media.direct.voice.has(id) || media.direct.call.has(id);
 
 /**
- * Proximity voice: with the mic on, you hear (and are heard by) teammates who
- * also have voice on and stand close by, louder the closer they are. Each pair
+ * Proximity voice: anyone with the mic on is heard by teammates standing close
+ * by, louder the closer they are — listeners don't need their own mic on (turn
+ * it on to talk back). Audio starts on the first click or key press. Each pair
  * connects directly (WebRTC, lowest latency) when the network allows; otherwise
  * the API relays the audio over the live socket. Also plays relayed call media.
  */
@@ -179,30 +180,36 @@ export function useVoice(live: LiveClient | null, bus: GameBus, media: Media, ca
   useEffect(() => {
     if (!live) return;
     const els = audio.current;
-    const m = new Mesh(live, "prox", () => {
-      for (const [id, el] of els)
-        if (!m.links.has(id)) {
-          el.srcObject = null;
-          els.delete(id);
+    const m = new Mesh(
+      live,
+      "prox",
+      () => {
+        for (const [id, el] of els)
+          if (!m.links.has(id)) {
+            el.srcObject = null;
+            els.delete(id);
+          }
+        for (const link of m.links.values()) {
+          if (!link.remote) continue;
+          let el = els.get(link.id);
+          if (!el) {
+            el = new Audio();
+            el.autoplay = true;
+            els.set(link.id, el);
+          }
+          if (el.srcObject !== link.remote) {
+            el.srcObject = link.remote;
+            el.play().catch(() => {});
+          }
         }
-      for (const link of m.links.values()) {
-        if (!link.remote) continue;
-        let el = els.get(link.id);
-        if (!el) {
-          el = new Audio();
-          el.autoplay = true;
-          els.set(link.id, el);
-        }
-        if (el.srcObject !== link.remote) {
-          el.srcObject = link.remote;
-          el.play().catch(() => {});
-        }
-      }
-      const ids = m.connected().map((l) => l.peer);
-      media.direct.voice = new Set(ids);
-      syncDirect(live, media);
-      setDirectPeers(ids);
-    });
+        // The server skips relaying to anyone we reach directly, even if we only send to them.
+        media.direct.voice = new Set(m.reached().map((l) => l.peer));
+        syncDirect(live, media);
+        // "Hearing": links carrying someone's voice to us.
+        setDirectPeers(m.connected().map((l) => l.peer));
+      },
+      true,
+    );
     mesh.current = m;
     return () => {
       m.dispose();
@@ -213,9 +220,9 @@ export function useVoice(live: LiveClient | null, bus: GameBus, media: Media, ca
     };
   }, [live, media]);
 
-  // Who to connect to directly: nearby teammates with voice on; volume by distance.
+  // Who to connect to directly: nearby teammates when either of us has the mic on; volume by distance.
   useEffect(() => {
-    if (!live || !on) return;
+    if (!live) return;
     const tick = () => {
       const m = mesh.current;
       const me = live.me;
@@ -223,7 +230,8 @@ export function useVoice(live: LiveClient | null, bus: GameBus, media: Media, ca
       const wanted = new Map<string, string>();
       if (!callRoom) {
         for (const p of live.peers.values()) {
-          if (!p.voice || p.call) continue;
+          // Both mics off: nothing to hear either way.
+          if ((!p.voice && !on) || p.call) continue;
           const id = proxLink(me, p.id);
           const d = distanceTo(bus, p);
           if (d <= VOICE_RADIUS || (m.links.has(id) && d <= VOICE_DROP)) wanted.set(id, p.id);
@@ -300,6 +308,21 @@ export function useVoice(live: LiveClient | null, bus: GameBus, media: Media, ca
       onError("Couldn’t use your microphone. Allow it in the browser to talk with people nearby.");
     }
   }, [on, live, media, stop, onError]);
+
+  // Browsers only play sound after a gesture: start the speaker on the first click or key press,
+  // so nearby voices are heard without touching the mic button.
+  useEffect(() => {
+    const unlock = () => {
+      media.player.resume();
+      audio.current.forEach((el) => el.paused && el.srcObject && el.play().catch(() => {}));
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, [media]);
 
   // Release the mic when the office closes.
   useEffect(() => stop, [stop]);

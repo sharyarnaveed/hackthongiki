@@ -15,9 +15,10 @@ import { resetPreparedOffice } from "@/components/office/prepare";
 import { PixelSprite } from "@/components/pixel/PixelArt";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { DeleteWorkspaceDialog, EditWorkspaceDialog, MembersDialog } from "./WorkspaceDialogs";
+import { WalletLink } from "./WalletLink";
 import { ROLE_LABEL, type Role } from "@/components/team/service";
 
-type Me = { id: string; fullName: string; email: string };
+type Me = { id: string; fullName: string; email: string; wallet: string | null };
 
 export type WorkspaceSummary = {
   workspaceId: string;
@@ -121,6 +122,12 @@ export function Dashboard() {
                   <p className="text-sm font-semibold leading-tight text-ink">{me.fullName}</p>
                   <p className="text-xs text-muted">{me.email}</p>
                 </div>
+              )}
+              {me && (
+                <WalletLink
+                  wallet={me.wallet}
+                  onChange={(wallet) => setState((s) => (s.status === "ready" ? { ...s, me: { ...s.me, wallet } } : s))}
+                />
               )}
               <button
                 type="button"

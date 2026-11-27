@@ -10,7 +10,9 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { once } from "node:events";
 import mongoose from "mongoose";
+import WebSocket from "ws";
 import { connectDb } from "../src/db.ts";
 import { outbox } from "../src/lib/mailer.ts";
 import { buildApp } from "../src/server.ts";
@@ -20,6 +22,8 @@ import { WaitlistModel } from "../src/models/Waitlist.ts";
 import { WorkspaceModel } from "../src/models/Workspace.ts";
 import { NoticeModel } from "../src/models/Notice.ts";
 import { MessageModel } from "../src/models/Message.ts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { createSiweMessage } from "viem/siwe";
 import { catalog } from "@/components/office/game/furniture";
 import { groupOf, isMovable, placementProblem, unreachable, type FurnitureMeta } from "@/components/office/game/layoutEdit";
 
@@ -139,6 +143,120 @@ describe("auth", () => {
     const s = await call("POST", "/api/auth/signin", undefined, { email: alice.email, password: PASSWORD });
     await call("POST", "/api/auth/signout", s.cookie, {});
     assert.equal((await call("GET", "/api/workspaces/mine", s.cookie)).status, 401);
+  });
+});
+
+describe("wallet sign-in (SIWE, EIP-4361)", () => {
+  let carol: Awaited<ReturnType<typeof newUser>>;
+  const wallet = privateKeyToAccount(generatePrivateKey());
+  const FRONTEND = "http://localhost:3000";
+
+  /** Ask for a nonce and sign a SIWE message with `account`, as the browser would. */
+  async function signed(account = wallet, tweak: Partial<Parameters<typeof createSiweMessage>[0]> = {}) {
+    const { body } = await call("GET", "/api/auth/wallet/nonce");
+    const message = createSiweMessage({
+      address: account.address,
+      chainId: 84532,
+      domain: "localhost:3000",
+      uri: FRONTEND,
+      scheme: "http",
+      nonce: body.nonce,
+      version: "1",
+      issuedAt: new Date(),
+      statement: "Sign in to TheSpace.",
+      ...tweak,
+    });
+    return { message, signature: await account.signMessage({ message }) };
+  }
+
+  it("hands out a fresh nonce each time", async () => {
+    const a = await call("GET", "/api/auth/wallet/nonce");
+    const b = await call("GET", "/api/auth/wallet/nonce");
+    assert.equal(a.status, 200);
+    assert.match(a.body.nonce, /^[a-zA-Z0-9]{8,}$/);
+    assert.notEqual(a.body.nonce, b.body.nonce);
+  });
+
+  it("won't sign in with a wallet no account is linked to", async () => {
+    const r = await call("POST", "/api/auth/wallet/signin", undefined, await signed());
+    assert.equal(r.status, 404);
+    assert.equal(r.body.noAccount, true);
+    assert.equal(r.cookie, undefined);
+  });
+
+  it("links a wallet to a signed-in account", async () => {
+    carol = await newUser("wallety");
+    assert.equal((await call("GET", "/api/auth/me", carol.cookie)).body.user.wallet, null);
+    assert.equal((await call("POST", "/api/auth/wallet/link", undefined, await signed())).status, 401, "needs a session");
+    const r = await call("POST", "/api/auth/wallet/link", carol.cookie, await signed());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.user.wallet, wallet.address);
+    assert.equal((await call("GET", "/api/auth/me", carol.cookie)).body.user.wallet, wallet.address);
+  });
+
+  it("signs in with the linked wallet", async () => {
+    const r = await call("POST", "/api/auth/wallet/signin", undefined, await signed());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.user.email, carol.email);
+    assert.ok(r.cookie);
+    const me = await call("GET", "/api/auth/me", r.cookie);
+    assert.equal(me.body.user.id, carol.id);
+  });
+
+  it("rejects a replayed signature (nonce is single-use)", async () => {
+    const once = await signed();
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, once)).status, 200);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, once)).status, 401);
+  });
+
+  it("rejects forged, tampered and made-up messages", async () => {
+    // Signed by someone else, claiming carol's address.
+    const thief = privateKeyToAccount(generatePrivateKey());
+    const forged = await signed(wallet);
+    forged.signature = await thief.signMessage({ message: forged.message });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, forged)).status, 401);
+
+    // Message changed after signing.
+    const tampered = await signed();
+    tampered.message = tampered.message.replace("Sign in to TheSpace.", "Sign in to TheSpace!");
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, tampered)).status, 401);
+
+    // A nonce the server never issued.
+    const message = createSiweMessage({ address: wallet.address, chainId: 1, domain: "localhost:3000", uri: FRONTEND, scheme: "http", nonce: "madeup123456", version: "1" });
+    const madeUp = { message, signature: await wallet.signMessage({ message }) };
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, madeUp)).status, 401);
+
+    // Expired message.
+    const expired = await signed(wallet, { expirationTime: new Date(Date.now() - 1000) });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, expired)).status, 401);
+
+    // Garbage.
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, { message: "hello", signature: "0x1234" })).status, 401);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, { message: "hello", signature: "nope" })).status, 400);
+  });
+
+  it("rejects a message made for another site (phishing)", async () => {
+    const evil = await signed(wallet, { domain: "evil.example", uri: "https://evil.example" });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, evil)).status, 401);
+    // Right message, but sent from a different page.
+    const ours = await signed();
+    const res = await app.inject({ method: "POST", url: "/api/auth/wallet/signin", remoteAddress: ip(), headers: { origin: "http://127.0.0.1:3000" }, payload: ours });
+    assert.equal(res.statusCode, 401);
+  });
+
+  it("won't link one wallet to two accounts", async () => {
+    const dave = await newUser("wallety2");
+    const r = await call("POST", "/api/auth/wallet/link", dave.cookie, await signed());
+    assert.equal(r.status, 409);
+    assert.equal((await call("GET", "/api/auth/me", dave.cookie)).body.user.wallet, null);
+  });
+
+  it("unlinks the wallet; email sign-in still works", async () => {
+    const r = await call("DELETE", "/api/auth/wallet", carol.cookie);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.user.wallet, null);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, await signed())).status, 404);
+    assert.equal((await call("POST", "/api/auth/signin", undefined, { email: carol.email, password: PASSWORD })).status, 200);
   });
 });
 
@@ -675,14 +793,21 @@ describe("live office", () => {
   const base = () => `/api/workspaces/${id}`;
   const ORIGIN = "http://localhost:3000";
 
+  // A real socket on a random local port. (`app.injectWS` sends Sec-WebSocket-Version as a
+  // number, which ws ≥ 8.23 rejects with a 400 — browsers send it as text, so the app is fine.)
+  let liveUrl = "";
+
   /** Open the live socket as someone; `next` waits for the first frame of a type (and matching `pred`). */
   async function connect(cookie: string, origin = ORIGIN) {
-    const ws = await app.injectWS(`${base()}/live`, { headers: { cookie, origin } });
+    liveUrl ||= (await app.listen({ port: 0, host: "127.0.0.1" })).replace(/^http/, "ws");
+    const ws = new WebSocket(`${liveUrl}${base()}/live`, { headers: { cookie, origin } });
     const inbox: any[] = [];
     const media: Buffer[] = [];
     let closed: number | null = null;
+    // Listen before the socket opens, so the welcome frame is never missed.
     ws.on("message", (d: Buffer, isBinary: boolean) => (isBinary ? media.push(d) : inbox.push(JSON.parse(String(d)))));
     ws.on("close", (code: number) => (closed = code));
+    await once(ws, "open");
     const next = (t: string, pred: (m: any) => boolean = () => true, ms = 3000) =>
       new Promise<any>((resolve, reject) => {
         const started = Date.now();
@@ -777,7 +902,7 @@ describe("live office", () => {
     second.ws.close();
   });
 
-  it("relays voice to nearby teammates with their mic on, tagged with who's talking", async () => {
+  it("relays a speaker's voice to nearby teammates (even with their own mic off), tagged with who's talking", async () => {
     const lou = await connect(owner.cookie);
     await lou.next("welcome");
     const k = await connect(kai.cookie);
@@ -785,15 +910,14 @@ describe("live office", () => {
     const kaiId = (await lou.next("join")).peer.id;
     const audio = Buffer.from([1, ...Array.from({ length: 640 }, (_, i) => i % 256)]);
 
-    // Lou's mic is off: Kai's voice isn't sent to him.
-    k.send({ t: "voice", on: true });
-    await lou.next("peer", (m) => m.id === kaiId && m.patch.voice === true);
+    // Kai's mic is off: nothing is relayed from him.
     k.ws.send(audio);
     await new Promise((r) => setTimeout(r, 150));
-    assert.equal(lou.media.length, 0, "only people with voice on hear it");
+    assert.equal(lou.media.length, 0, "a muted mic sends nothing");
 
-    lou.send({ t: "voice", on: true });
-    await k.next("peer", (m) => m.patch.voice === true);
+    // Kai turns his mic on; Lou hears him with his own mic still off.
+    k.send({ t: "voice", on: true });
+    await lou.next("peer", (m) => m.id === kaiId && m.patch.voice === true);
     k.ws.send(audio);
     const frame = await lou.nextMedia();
     assert.equal(frame[0], 1, "audio frame");

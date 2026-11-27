@@ -2,7 +2,8 @@ import type { FastifyBaseLogger, FastifyPluginAsync } from "fastify";
 import { sendVerificationEmail } from "../lib/mailer.ts";
 import { rateLimiter } from "../lib/onboarding.ts";
 import { hashPassword, verifyPassword } from "../lib/password.ts";
-import { endSession, requireAuth, startSession } from "../lib/session.ts";
+import { authUserOf, endSession, requireAuth, startSession } from "../lib/session.ts";
+import { issueNonce, verifySiwe } from "../lib/siwe.ts";
 import { CODE_TTL_MS, MAX_ATTEMPTS, RESEND_COOLDOWN_MS, codeMatches, hashCode, newCode } from "../lib/verification.ts";
 import { UserModel } from "../models/User.ts";
 import { DEFAULT_PREFERENCES, preferencesOf, type Preferences } from "../lib/defaults.ts";
@@ -11,9 +12,25 @@ type SignUpBody = { fullName: string; email: string; dob: string; password: stri
 type VerifyBody = { email: string; code: string };
 type ResendBody = { email: string };
 type SignInBody = { email: string; password: string; remember?: boolean };
+type WalletBody = { message: string; signature: string; remember?: boolean };
 
 // Password guessing: 10 sign-in attempts per IP per 15 minutes.
 const signInLimit = rateLimiter(10, 15 * 60 * 1000);
+// Wallet nonces: 30 per IP per 15 minutes (each one is a DB row until it expires).
+const nonceLimit = rateLimiter(30, 15 * 60 * 1000);
+
+/** A signed Sign-In with Ethereum message (EIP-4361) and its signature. */
+const walletBodySchema = (withRemember: boolean) => ({
+  type: "object",
+  required: ["message", "signature"],
+  additionalProperties: false,
+  properties: {
+    message: { type: "string", minLength: 1, maxLength: 4096 },
+    signature: { type: "string", pattern: "^0x[0-9a-fA-F]+$", maxLength: 1024 },
+    ...(withRemember ? { remember: { type: "boolean" } } : {}),
+  },
+});
+const BAD_SIGNATURE = { message: "We couldn't verify that wallet signature. Try again." };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TAKEN = { message: "Email already registered.", errors: { email: "An account with this email already exists." } };
@@ -220,9 +237,73 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       await startSession(reply, user._id, req.body.remember ?? true);
       await UserModel.updateOne({ _id: user._id }, { $set: { lastSignInAt: new Date() } });
       req.log.info({ email }, "🔑 Signed in");
-      return reply.send({ user: { id: user.id, fullName: user.fullName, email: user.email, preferences: preferencesOf(user.preferences) } });
+      return reply.send({ user: authUserOf(user) });
     },
   );
+
+  /* ---------- Sign-In with Ethereum (EIP-4361) ---------- */
+
+  /** Step 1: a one-time nonce to put in the message the wallet signs. */
+  app.get("/wallet/nonce", async (req, reply) => {
+    if (!nonceLimit(req.ip)) return reply.code(429).send({ message: "Too many wallet requests. Wait a few minutes and try again." });
+    reply.header("Cache-Control", "no-store");
+    return reply.send({ nonce: await issueNonce() });
+  });
+
+  /** Step 2: sign in with a wallet that's linked to an account. */
+  app.post<{ Body: WalletBody }>("/wallet/signin", { schema: { body: walletBodySchema(true) } }, async (req, reply) => {
+    if (!signInLimit(req.ip)) return reply.code(429).send({ message: "Too many sign-in attempts. Wait a few minutes and try again." });
+    const check = await verifySiwe(req.body.message, req.body.signature, req.headers.origin, req.headers.host);
+    if (!check.ok) {
+      req.log.warn({ reason: check.reason }, "❌ Wallet sign-in failed");
+      return reply.code(401).send(BAD_SIGNATURE);
+    }
+    const user = await UserModel.findOne({ walletAddress: check.address.toLowerCase() });
+    if (!user) {
+      req.log.warn({ wallet: check.address }, "❌ Wallet sign-in: no account linked");
+      return reply.code(404).send({
+        message: "No account is linked to this wallet yet. Sign in with your email, then link the wallet from your dashboard.",
+        noAccount: true,
+      });
+    }
+    if (!user.emailVerified) return reply.code(403).send({ message: "Verify your email before signing in.", needsVerification: true });
+    await startSession(reply, user._id, req.body.remember ?? true);
+    await UserModel.updateOne({ _id: user._id }, { $set: { lastSignInAt: new Date() } });
+    req.log.info({ email: user.email, wallet: check.address }, "🔑 Signed in with wallet");
+    return reply.send({ user: authUserOf(user) });
+  });
+
+  /** Link a wallet to the signed-in account (replaces any wallet linked before). */
+  app.post<{ Body: WalletBody }>("/wallet/link", { onRequest: requireAuth, schema: { body: walletBodySchema(false) } }, async (req, reply) => {
+    const check = await verifySiwe(req.body.message, req.body.signature, req.headers.origin, req.headers.host);
+    if (!check.ok) {
+      req.log.warn({ user: req.user!.email, reason: check.reason }, "❌ Wallet link failed");
+      return reply.code(401).send(BAD_SIGNATURE);
+    }
+    const address = check.address.toLowerCase();
+    const owner = await UserModel.findOne({ walletAddress: address }, { _id: 1 });
+    const taken = { message: "This wallet is already linked to another account." };
+    if (owner && owner.id !== req.user!.id) return reply.code(409).send(taken);
+    let user;
+    try {
+      user = await UserModel.findByIdAndUpdate(req.user!.id, { $set: { walletAddress: address, walletLinkedAt: new Date() } }, { returnDocument: "after" });
+    } catch (err) {
+      // Unique-index race: two accounts linking the same wallet at once.
+      if ((err as { code?: number }).code === 11000) return reply.code(409).send(taken);
+      throw err;
+    }
+    if (!user) return reply.code(404).send({ message: "Account not found." });
+    req.log.info({ user: user.email, wallet: check.address }, "👛 Wallet linked");
+    return reply.send({ user: authUserOf(user) });
+  });
+
+  /** Unlink the wallet. Email + password keep working. */
+  app.delete("/wallet", { onRequest: requireAuth }, async (req, reply) => {
+    const user = await UserModel.findByIdAndUpdate(req.user!.id, { $unset: { walletAddress: 1, walletLinkedAt: 1 } }, { returnDocument: "after" });
+    if (!user) return reply.code(404).send({ message: "Account not found." });
+    req.log.info({ user: user.email }, "👛 Wallet unlinked");
+    return reply.send({ user: authUserOf(user) });
+  });
 
   app.post("/signout", async (req, reply) => {
     await endSession(req, reply);

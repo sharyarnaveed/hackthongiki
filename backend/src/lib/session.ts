@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { Types } from "mongoose";
+import { getAddress } from "viem";
 import type { FastifyReply, FastifyRequest, onRequestAsyncHookHandler } from "fastify";
 import { SessionModel } from "../models/Session.ts";
 import { UserModel } from "../models/User.ts";
@@ -11,7 +12,19 @@ const DAY = 24 * 60 * 60 * 1000;
 const REMEMBER_MS = 30 * DAY;
 const SHORT_MS = DAY;
 
-export type AuthUser = { id: string; fullName: string; email: string; preferences: Preferences };
+/** `wallet` is the linked Ethereum address (checksummed), or null. */
+export type AuthUser = { id: string; fullName: string; email: string; preferences: Preferences; wallet: string | null };
+
+type UserDoc = { id: string; fullName: string; email: string; preferences?: Partial<Preferences> | null; walletAddress?: string | null };
+
+/** The public view of a user, as sent to the browser. */
+export const authUserOf = (u: UserDoc): AuthUser => ({
+  id: u.id,
+  fullName: u.fullName,
+  email: u.email,
+  preferences: preferencesOf(u.preferences),
+  wallet: u.walletAddress ? getAddress(u.walletAddress) : null,
+});
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -55,7 +68,7 @@ async function lookup(req: FastifyRequest): Promise<Lookup> {
   const user = await UserModel.findById(session.userId);
   if (!user) return { user: null, reason: "session's user no longer exists" };
   if (!user.emailVerified) return { user: null, reason: "user's email isn't verified" };
-  return { user: { id: user.id, fullName: user.fullName, email: user.email, preferences: preferencesOf(user.preferences) } };
+  return { user: authUserOf(user) };
 }
 
 export async function currentUser(req: FastifyRequest): Promise<AuthUser | null> {

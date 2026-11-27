@@ -255,7 +255,7 @@ Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to 
 - [x] Move furniture around and save the layout
 
 ### Blockchain (Web3 office)
-Everything runs on an EVM testnet first (e.g. Base Sepolia or Polygon Amoy), so nobody spends real money.
+Everything runs on the Avalanche Fuji testnet (C-Chain) first, so nobody spends real money. Contracts are written in Remix — see `contracts/README.md`.
 
 **Identity & access**
 - [ ] **Sign in with a wallet** (Sign-In with Ethereum, EIP-4361) next to email/password, and link a wallet to an existing account

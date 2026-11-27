@@ -252,8 +252,9 @@ class LiveHub {
 
   /**
    * Voice and video frames. In a call they go to everyone in the same call;
-   * otherwise audio goes to nearby teammates who have voice on (and aren't in a
-   * call). The sender's id is put in front so listeners know who's talking.
+   * otherwise a speaker with the mic on is heard by every nearby teammate who
+   * isn't in a call — listeners don't need their own mic on. The sender's id is
+   * put in front so listeners know who's talking.
    */
   private relayMedia(workspaceId: string, peer: Peer, raw: RawData) {
     const space = this.spaces.get(workspaceId);
@@ -270,7 +271,7 @@ class LiveHub {
       // Already hearing/seeing this peer over a direct link.
       if (o === peer || peer.direct.has(o.id)) return false;
       if (peer.call) return o.call === peer.call;
-      return peer.voice && o.voice && !o.call && Math.hypot(o.x - peer.x, o.y - peer.y) <= VOICE_DROP;
+      return peer.voice && !o.call && Math.hypot(o.x - peer.x, o.y - peer.y) <= VOICE_DROP;
     });
     if (!to.length) return;
     const out = Buffer.concat([Buffer.from([kind]), Buffer.from(peer.id.padEnd(MEDIA_ID_LEN).slice(0, MEDIA_ID_LEN), "ascii"), payload]);

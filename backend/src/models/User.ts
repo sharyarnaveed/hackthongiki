@@ -19,6 +19,9 @@ const userSchema = new Schema(
       nameTag: { type: Boolean, default: true },
     },
     lastSignInAt: { type: Date },
+    // Linked Ethereum wallet for Sign-In with Ethereum, stored lowercase so lookups are exact. One account per wallet.
+    walletAddress: { type: String, lowercase: true, trim: true, unique: true, sparse: true },
+    walletLinkedAt: { type: Date },
   },
   { timestamps: true, collection: "users" },
 );
