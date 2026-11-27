@@ -211,6 +211,36 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] Small stats: coffees made, focus time, cat pets
 - [x] Move furniture around and save the layout
 
+### Blockchain (Web3 office)
+Everything runs on an EVM testnet first (e.g. Base Sepolia or Polygon Amoy), so nobody spends real money.
+
+**Identity & access**
+- [ ] **Sign in with a wallet** (Sign-In with Ethereum, EIP-4361) next to email/password, and link a wallet to an existing account
+- [ ] **Token-gated workspaces**: the owner can let anyone holding a chosen NFT or token join, instead of (or as well as) the invitation code
+- [ ] **Workspace ownership as an NFT**: each office gets an ownership token; sending it to someone else transfers the workspace (kept in sync with the existing transfer flow)
+- [ ] Use an NFT you own as your avatar or name-tag badge (ownership checked on the server)
+
+**Badges & rewards**
+- [ ] **Achievement badges** as soulbound (non-transferable, ERC-5192) tokens, earned from office stats: 100 coffees, 10 hours of focus, first cat pet, 30-day streak
+- [ ] **Proof of attendance**: stand-ups, events and meetings in the office can mint a small attendance badge to everyone who was there
+- [ ] **Kudos**: send a teammate a thank-you token (or a testnet "coffee tip") from the members panel, with a public leaderboard
+- [ ] Badge shelf in the office and on the profile, showing your on-chain badges
+
+**Team decisions**
+- [ ] **On-chain polls** on the notice board: members vote with a wallet signature (gasless, Snapshot-style), the result is final and anyone can check it
+- [ ] Optional team treasury (multisig wallet) shown in the office, with proposals voted on by members
+
+**Trust & transparency**
+- [ ] **Tamper-proof audit log**: important admin actions (role changes, removals, ownership transfers, layout saves) are hashed together and the daily Merkle root is written on-chain, so the history can be checked but not rewritten
+- [ ] Office layout snapshots: save a hash of the saved office on-chain, or mint it as a collectible "office NFT"
+
+**Under the hood**
+- [ ] Smart contracts (Solidity) with Foundry or Hardhat, plus contract tests
+- [ ] Frontend wallet connect with wagmi + viem; backend reads the chain with viem and listens for events (badges minted, ownership token moved)
+- [ ] Gas sponsored for users (account abstraction, ERC-4337 paymaster), so people without crypto can still earn badges
+- [ ] No private keys in the database or the repo; the minting key lives in an env variable / secret manager
+- [ ] Every on-chain feature is optional: a workspace works exactly as today without a wallet
+
 ### Production
 - [ ] Shared rate limiter (Redis) instead of in-memory
 - [ ] Tests for the office generator (API routes are covered by `npm test`)
