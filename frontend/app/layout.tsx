@@ -1,40 +1,49 @@
-import type { Metadata } from "next";
-import { Inter, Press_Start_2P } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { Archivo, IBM_Plex_Mono, Inter, Silkscreen } from "next/font/google";
+import { BRAND } from "@/components/landing/brand";
 import "./globals.css";
-import { ThemeProvider } from "@/components/shell/ThemeProvider";
-import { TitleBar } from "@/components/shell/TitleBar";
-import { Toaster } from "@/components/common/Toast";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { themeInitScript } from "@/components/shell/theme-script";
 
-const inter = Inter({ variable: "--font-inter", subsets: ["latin"] });
-const pixel = Press_Start_2P({ variable: "--font-press-start", weight: "400", subsets: ["latin"] });
+const display = Inter({
+  variable: "--font-inter",
+  subsets: ["latin"],
+});
+
+// Variable font with a width axis: condensed for the hero, normal for body.
+const sans = Archivo({
+  variable: "--font-archivo",
+  subsets: ["latin"],
+  axes: ["wdth"],
+});
+
+const mono = IBM_Plex_Mono({
+  variable: "--font-plex-mono",
+  subsets: ["latin"],
+  weight: ["400", "500"],
+});
+
+const pixel = Silkscreen({
+  variable: "--font-silkscreen",
+  subsets: ["latin"],
+  weight: ["400", "700"],
+});
 
 export const metadata: Metadata = {
-  title: "Virtual Office",
-  description: "A virtual office for remote teams, and a cozy pixel home for couples.",
+  title: `${BRAND.name} — Your team, together`,
+  description:
+    "A cozy pixel-art virtual office for remote teams. Walk over to a teammate, share a coffee break, and make remote work feel a little less lonely.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#F5F1E8",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      data-mode="office"
-      suppressHydrationWarning
-      className={`${inter.variable} ${pixel.variable} antialiased`}
+      className={`${display.variable} ${sans.variable} ${mono.variable} ${pixel.variable} antialiased`}
     >
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-      </head>
-      <body className="flex h-screen flex-col">
-        <ThemeProvider>
-          <TooltipProvider delayDuration={300}>
-            <TitleBar />
-            <main className="relative min-h-0 flex-1 overflow-hidden">{children}</main>
-            <Toaster />
-          </TooltipProvider>
-        </ThemeProvider>
-      </body>
+      <body className="min-h-full bg-paper font-sans text-ink">{children}</body>
     </html>
   );
 }
