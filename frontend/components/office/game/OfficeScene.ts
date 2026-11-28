@@ -64,6 +64,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
     /** Where the player sits at their own desk, and where to stand when arriving from afar. */
     private myChair: { x: number; y: number; depth: number; front: { x: number; y: number } } | null = null;
     private room = "";
+    private isFree: (x: number, y: number) => boolean = () => false;
     private paused = false;
     private puffs: P.GameObjects.Image[] = [];
     private coffeeAt = { x: 0, y: 0 };
@@ -119,6 +120,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       const free = (x: number, y: number) => x > 0 && y > 0 && x < worldW && y < worldH && !blocked.getTileAtWorldXY(x, y - 3) && !map.walls[Math.floor((y - 3) / TILE)]?.[Math.floor(x / TILE)];
       const start = saved && free(saved.x, saved.y) ? saved : { x: map.spawn.tx * TILE, y: map.spawn.ty * TILE + TILE / 2 };
       this.player = new PlayerController(this, start.x, start.y);
+      this.isFree = free;
       bus.positionOf = () => this.player.restPoint;
       this.physics.world.setBounds(0, 0, worldW, worldH);
       this.physics.add.collider(this.player.sprite, blocked);
@@ -171,6 +173,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         bus.on("peer-move", ({ id, ...pose }) => this.remotes.move(id, pose)),
         bus.on("peer-leave", (id) => this.remotes.remove(id)),
         bus.on("arrange-saved", () => this.endArranging(false)),
+        bus.on("go-to-room", (name) => this.goToRoom(name)),
         bus.on("set-status", (status) => {
           if (status === "focusing") this.goToDesk();
           else if (status === "available") this.player.standUp();
@@ -266,6 +269,32 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         this.targets.push({ id: o.interact, interaction, x0: o.tx * TILE, y0: (o.ty - fh + 1) * TILE, x1: (o.tx + fw) * TILE, y1: bottom, pose: POSES[o.kind] ?? "front" });
       }
       if (o.interact === "coffee") this.coffeeAt = { x: x + 8, y: bottom - 22 };
+    }
+
+    /** Put the player on the free floor tile of `name` closest to its meeting table (or its middle). */
+    private goToRoom(name: string) {
+      if (this.arranging) return;
+      const room = this.data_.prepared.map.rooms.find((r) => r.name === name);
+      if (!room) return;
+      const inRoom = (x: number, y: number) => x >= room.x * TILE && x < (room.x + room.w) * TILE && y >= room.y * TILE && y < (room.y + room.h) * TILE;
+      const table = this.targets.find((t) => t.interaction.action === "meeting" && inRoom((t.x0 + t.x1) / 2, (t.y0 + t.y1) / 2));
+      const aim = table ? { x: (table.x0 + table.x1) / 2, y: table.y1 } : { x: (room.x + room.w / 2) * TILE, y: (room.y + room.h / 2) * TILE };
+      let best: { x: number; y: number; d: number } | null = null;
+      for (let ty = room.y; ty < room.y + room.h; ty++) {
+        for (let tx = room.x; tx < room.x + room.w; tx++) {
+          const x = tx * TILE + TILE / 2;
+          const y = ty * TILE + TILE / 2;
+          if (!this.isFree(x, y)) continue;
+          const d = Math.hypot(x - aim.x, y - aim.y);
+          if (!best || d < best.d) best = { x, y, d };
+        }
+      }
+      if (!best) return;
+      if (this.player.seated) this.player.standUp();
+      (this.player.sprite.body as P.Physics.Arcade.Body).reset(best.x, best.y);
+      // Say the new room now, so the next pose sent to the server already carries it (the call checks it).
+      this.room = room.name;
+      this.data_.bus.emit("room", room.name);
     }
 
     private setPaused(p: boolean) {

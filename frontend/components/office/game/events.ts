@@ -28,6 +28,8 @@ export interface GameEvents {
   "set-arrange": boolean;
   /** The moved layout was saved: leave arrange mode as it is while the new office loads. */
   "arrange-saved": void;
+  /** Walk the player straight into a room (joining a video call from anywhere in the office). */
+  "go-to-room": string;
   /** Live office: a teammate appeared or changed avatar, moved, or left. */
   "peer-upsert": PeerView;
   "peer-move": Pose & { id: string };

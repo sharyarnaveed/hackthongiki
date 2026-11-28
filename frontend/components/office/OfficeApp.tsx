@@ -198,6 +198,32 @@ function World({
     return () => clearInterval(t);
   }, [call.room, media]);
   const chatOpen = chat !== null;
+
+  // Video calls going on in the office (room → who's in it), for the "Join" banner.
+  const calls = useMemo(() => {
+    const byRoom = new Map<string, string[]>();
+    for (const p of peers) if (p.call) byRoom.set(p.call, [...(byRoom.get(p.call) ?? []), p.name]);
+    return [...byRoom].map(([room, names]) => ({ room, names }));
+  }, [peers]);
+  const joinCall = call.join;
+  /** Join a call from anywhere: step into its room, then join (walking out of the room still hangs up). */
+  const joinCallIn = useCallback(
+    (name: string) => {
+      setPanel(null);
+      setChat(null);
+      bus.emit("go-to-room", name);
+      joinCall(name);
+    },
+    [bus, joinCall],
+  );
+  // Say so when a call starts that you're not in.
+  const knownCalls = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const c of calls) {
+      if (!knownCalls.current.has(c.room) && call.room !== c.room) say(`📹 ${c.names[0]} is in a video call in the ${c.room}.`);
+    }
+    knownCalls.current = new Set(calls.map((c) => c.room));
+  }, [calls, call.room, say]);
   const names = useMemo(() => new Map(peers.map((p) => [p.id, p.name])), [peers]);
 
   // Count messages from others while the chat is closed.
@@ -560,6 +586,29 @@ function World({
             Use this tab
           </button>
         </p>
+      )}
+      {!call.room && !arrange && calls.length > 0 && (
+        <div role="status" className="absolute inset-x-0 top-32 mx-auto flex w-fit max-w-[92vw] flex-col gap-2">
+          {calls.map((c) => {
+            const full = c.names.length >= CALL_MAX;
+            return (
+              <p key={c.room} className="flex flex-wrap items-center gap-2 border-2 border-ink bg-sun px-3 py-2 text-sm font-semibold shadow-pixel-sm">
+                <span>
+                  📹 {c.names.length > 2 ? `${c.names.slice(0, 2).join(", ")} and ${c.names.length - 2} more` : c.names.join(" and ")}{" "}
+                  {c.names.length === 1 ? "is" : "are"} in a video call in the {c.room}.
+                </span>
+                <button
+                  type="button"
+                  disabled={full}
+                  onClick={() => joinCallIn(c.room)}
+                  className="border-2 border-ink bg-paper px-2 py-0.5 hover:bg-paper-deep disabled:opacity-60"
+                >
+                  {full ? "Call is full" : "Join"}
+                </button>
+              </p>
+            );
+          })}
+        </div>
       )}
       <AnimatePresence>
         {chat && workspaceId && !arrange && (
