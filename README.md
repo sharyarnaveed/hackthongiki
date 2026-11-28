@@ -76,6 +76,95 @@ Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to 
 
 ---
 
+## Testing the blockchain features
+
+A step-by-step check of the **workspace ownership NFT** and the **NFT decor market** on Avalanche Fuji.
+Deploy both contracts and fill in `backend/.env` first (see `contracts/README.md`).
+
+### Before you start
+You need:
+- **3 MetaMask accounts**, all on **Fuji**:
+  - **"TheSpace app"**: only for deploying and `npm run seed:decor`. Don't use it in the app.
+  - **"Wallet A"**: you, the workspace owner.
+  - **"Wallet B"**: a friend, the second user.
+- **Test AVAX** in Wallet A and Wallet B (about 0.2 each is plenty) from https://core.app/tools/testnet-faucet
+- **2 app users** with different emails: **User A** and **User B**.
+  - Use a second Chrome profile (or another browser with MetaMask) for User B, so both can be signed in at once.
+
+⏱️ **Timing:** blockchain steps take **5–30 seconds**. If something hasn't updated, wait a bit and refresh the page.
+
+### Part 1: Startup (2 min)
+| # | Do | ✅ Pass if |
+|---|---|---|
+| 1.1 | `cd backend && npm run dev` | Log shows `🍃 MongoDB connected` |
+| 1.2 | Same log | `⛓️ On-chain ownership on` |
+| 1.3 | Same log | `🪴 Decor market on`, then `Decor market loaded` with `items: 9` |
+| 1.4 | `cd frontend && npm run dev`, open http://localhost:3000 | Landing page loads |
+
+❌ If you see `On-chain ownership off: …`, the message says exactly what's wrong in `.env`.
+
+### Part 2: Linking a wallet (2 min)
+| # | Do | ✅ Pass if |
+|---|---|---|
+| 2.1 | User A: dashboard → **Link wallet** → sign in MetaMask (free, no gas) | Address shows as `0x12…ab` |
+| 2.2 | User B: same with Wallet B | Address shows |
+| 2.3 | Sign out, then sign in with **wallet** instead of email | You're signed in |
+
+### Part 3: Ownership NFT (15 min)
+| # | Do | ✅ Pass if |
+|---|---|---|
+| 3.1 | User A: **unlink** the wallet, create a new workspace, open **Members** | **Ownership NFT** box says *"held by TheSpace until you link a wallet"* |
+| 3.2 | Click **View on Snowtrace** | The token page opens (report it if the link is broken) |
+| 3.3 | User A: **link Wallet A** again, wait 30 s, reopen Members | Box says *"is in your wallet 0x…"* |
+| 3.4 | User B: join with the invite code | Joins normally |
+| 3.5 | User A: Members → **Transfer ownership** to B | B is owner; after about 30 s the box shows **Wallet B's** address |
+| 3.6 | ⭐ **The key test.** Wallet B in MetaMask: send the NFT to **Wallet A** (see the tip below) | After about 30 s, **User A is owner again** in the app and gets a "You now own" email |
+| 3.7 | Wallet A: try sending the NFT to a **random address** | MetaMask warns it will fail, or it fails. The app doesn't change |
+| 3.8 | User A: **unlink** the wallet, wait 30 s | Box goes back to *"held by TheSpace"* |
+| 3.9 | User A: **delete** the workspace | On Snowtrace the token is burned (or in Remix, `exists(tokenId)` = false) |
+
+💡 **Tip for 3.6: sending an NFT in MetaMask**
+1. MetaMask → **NFTs** tab → **Import NFT**.
+2. Enter the contract address and the token ID **as a decimal number**. The decimal is at the end of the Snowtrace link.
+3. Open the NFT → **Send**.
+
+If MetaMask won't show it, use Remix instead: as Wallet B, call `transferFrom(<WalletB>, <WalletA>, <tokenId>)`.
+
+### Part 4: Decor market (15 min)
+| # | Do | ✅ Pass if |
+|---|---|---|
+| 4.1 | User A: dashboard → **Decor market** | 3 tabs; **Shop** shows 9 items with pictures and prices |
+| 4.2 | Shop → **Buy** Golden Monstera → confirm | "You bought…"; it appears in **My decor**; AVAX goes down by 0.01 plus gas |
+| 4.3 | My decor → pick your office → **Place** | "It's in your office now" |
+| 4.4 | Open the office | The plant is near the entrance with a **twinkling sparkle** ✨ |
+| 4.5 | Office → **Arrange** → drag the plant → save | It moves and stays there after a refresh |
+| 4.6 | My decor → **Take out of office** | It's gone from the office, still in My decor |
+| 4.7 | Place it again, then **Sell…** → `0.05` → **List** → confirm | It shows on the **Market** tab as "from you"; **it leaves the office** |
+| 4.8 | Market → **Cancel sale** | It's back in My decor |
+| 4.9 | List it again. User B: Market → **Buy for 0.05** | B has it in My decor; **Wallet A gets +0.05 AVAX** |
+| 4.10 | User B: try to place it in **A's** office | Not offered; only offices B owns appear |
+| 4.11 | Remix (TheSpace app): `updateItem(0, 10000000000000000, false)` | After 30 s, the shop shows **Sold out** for that item |
+| 4.12 | Remix (TheSpace app): `withdraw(<your address>)` | Shop sales arrive at that address |
+
+### Part 5: Things that should fail politely (5 min)
+| # | Do | ✅ Pass if |
+|---|---|---|
+| 5.1 | Switch MetaMask to a **different account** than the linked one, then Buy | Message: *"Switch MetaMask to your linked wallet…"* |
+| 5.2 | Switch MetaMask to another network (e.g. Ethereum), then Buy | MetaMask asks to **switch to Fuji** |
+| 5.3 | Click Buy, then **Reject** in MetaMask | Message: *"You cancelled the transaction…"* |
+| 5.4 | Use a wallet with **0 AVAX**, then Buy | Message about not enough AVAX |
+| 5.5 | Sell with price `abc` or `0` | Red hint; the List button is disabled |
+| 5.6 | Restart the backend | Shop still has 9 items (no duplicates); your decor is still there |
+
+### Part 6: Nothing else broke (5 min)
+- [ ] Create a workspace, join with a code, chat, voice, desk swap and moving furniture all still work.
+- [ ] Remove `OWNERSHIP_CONTRACT` and `DECOR_CONTRACT` from `.env` and restart: the app works exactly as before, the NFT box is hidden, and the market says *"isn't set up yet"*.
+
+### If something fails, note:
+1. The **test number** (e.g. "3.6 failed")
+2. A **screenshot** of the page
+3. The **backend log lines** around that moment (lines with ⛓️, 🪴 or ❌)
+
 ## What we have done
 
 ### Accounts & auth
@@ -257,6 +346,7 @@ Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to 
 ### Blockchain (Web3 office)
 Everything runs on **Avalanche Fuji**, a free test network, so nobody spends real money. Smart contracts are deployed from the browser with Remix: see `contracts/README.md`.
 Every blockchain feature is optional: without a wallet, the app works exactly as it does today.
+How to test it all: see [Testing the blockchain features](#testing-the-blockchain-features).
 
 **Step 1: Setup (do once)**
 - [x] Write the workspace ownership contract (`contracts/WorkspaceOwnership.sol`)
