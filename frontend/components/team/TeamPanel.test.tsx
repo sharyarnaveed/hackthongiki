@@ -294,3 +294,38 @@ describe("TeamPanel as an admin", () => {
     expect(await screen.findByText("Invitation code")).toBeInTheDocument();
   });
 });
+
+describe("TeamPanel ownership NFT", () => {
+  const nft: service.Ownership = {
+    chainId: 43113,
+    contract: "0x1111111111111111111111111111111111111111",
+    tokenId: "0x665f1c2ab3e4d5f6a7b8c9d0",
+    minted: true,
+    holder: "0x2222222222222222222222222222222222222222",
+    inCustody: false,
+    syncedAt: "2026-11-28T00:00:00Z",
+    error: null,
+    url: "https://testnet.snowtrace.io/nft/0x1111111111111111111111111111111111111111/1",
+    contractUrl: null,
+  };
+  const section = () => screen.getByRole("region", { name: "Ownership NFT" });
+
+  it("shows whose wallet holds the token, with a Snowtrace link", async () => {
+    api.getMembers.mockResolvedValue(team({ ownership: nft }));
+    await show(<TeamPanel workspaceId="ws1" />);
+    expect(section()).toHaveTextContent("Olive's wallet 0x2222…2222");
+    expect(within(section()).getByRole("link", { name: /View on Snowtrace/ })).toHaveAttribute("href", nft.url);
+  });
+
+  it("says the app holds it until the owner links a wallet", async () => {
+    api.getMembers.mockResolvedValue(team({ members: [{ ...olive, you: true }, bob], ownership: { ...nft, inCustody: true } }));
+    await show(<TeamPanel workspaceId="ws1" />);
+    expect(section()).toHaveTextContent("held by TheSpace until you link a wallet");
+  });
+
+  it("is hidden when on-chain ownership is off", async () => {
+    api.getMembers.mockResolvedValue(team({ ownership: null }));
+    await show(<TeamPanel workspaceId="ws1" />);
+    expect(screen.queryByRole("region", { name: "Ownership NFT" })).toBeNull();
+  });
+});

@@ -5,18 +5,22 @@
   "scripts": {
     "dev": "tsx watch --env-file=.env app.ts",
     "start": "tsx --env-file=.env app.ts",
-    "test": "MAIL_TRANSPORT=memory LOG_LEVEL=${LOG_LEVEL:-silent} LOG_REQUESTS=off node --env-file=.env --import tsx --test --test-concurrency=1 test/*.test.ts"
+    "test": "MAIL_TRANSPORT=memory LOG_LEVEL=${LOG_LEVEL:-silent} LOG_REQUESTS=off node --env-file=.env --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "seed:decor": "tsx --env-file=.env scripts/seed-decor.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
     "@fastify/cors": "^11.4.3",
+    "@fastify/websocket": "^11.3.7",
     "fastify": "^5.12.8",
     "mongoose": "^9.13.1",
-    "nodemailer": "^10.6.1"
+    "nodemailer": "^10.6.1",
+    "viem": "^2.58.8"
   },
   "devDependencies": {
     "@types/node": "^24.19.4",
     "@types/nodemailer": "^8.0.2",
+    "@types/ws": "^8.18.2",
     "pino-pretty": "^13.2.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"

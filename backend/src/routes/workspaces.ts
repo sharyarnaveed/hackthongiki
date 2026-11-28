@@ -41,6 +41,11 @@ import { deskRequestsView, staleRequests } from "../lib/deskRequests.ts";
 import { focusSession } from "../lib/stats.ts";
 import { officeLifeRoutes } from "./officeLife.ts";
 import { NoticeModel } from "../models/Notice.ts";
+import { live } from "../live/hub.ts";
+import { deleteMessages, liveRoutes } from "./live.ts";
+import { ownershipView, syncWorkspace } from "../lib/ownership.ts";
+import { pruneDecor } from "../lib/decor.ts";
+import { decorRoutes } from "./decor.ts";
 
 type CreateBody = {
   displayName: string;
@@ -78,6 +83,10 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   await app.register(deskRequestRoutes);
   // Notice board, office stats and moving furniture.
   await app.register(officeLifeRoutes);
+  // Live presence, movement, calls and the workspace chat.
+  await app.register(liveRoutes);
+  // NFT decor in the office.
+  await app.register(decorRoutes);
 
   /** Workspaces the signed-in user belongs to (used to skip onboarding for returning users). */
   app.get("/mine", async (req) => {
@@ -194,6 +203,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         },
         "✅ Workspace saved to MongoDB",
       );
+      // Mint the workspace's ownership token (no-op when on-chain ownership is off).
+      syncWorkspace(ws._id);
 
       // Invitations are best effort: the workspace exists even if some emails fail.
       const results = await Promise.allSettled(emails.map((e) => sendInvitationEmail(e, owner, name, formatCode(ws.inviteCode))));
@@ -226,7 +237,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
   app.get<{ Params: { id: string } }>("/:id/office", async (req, reply) => {
     const found = await memberWorkspace(req.params.id, req.user!.id, req.log);
     if (!found) return reply.code(404).send(NOT_FOUND);
-    const { ws, me } = found;
+    const { me } = found;
+    let { ws } = found;
     if (!ws.office) {
       req.log.info({ id: ws.id, user: req.user!.email }, "🏗️  No saved office yet — generating one");
       const office = buildOffice(ws, req.log);
@@ -248,6 +260,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         return reply.send(officeView(fresh, freshMe, req.user!));
       }
     }
+    // Decor NFTs the owner's wallet no longer holds (sold, sent away, new owner) leave the office.
+    if (await pruneDecor(ws)) ws = (await WorkspaceModel.findById(ws._id)) ?? ws;
     // Older workspaces (or a plan with fewer desks) may have members without a valid desk.
     await saveDesks(ws, assignDesks(ws), "office opened", req.log);
     await touch(ws, me, req.log);
@@ -326,6 +340,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       await ws.save();
       if (moved.length) req.log.info({ id: ws.id, moved: moved.map((c) => `${c.member} → ${deskLabel(c.to)}`) }, "🪑 Desks reassigned for the new office");
       req.log.info({ id: ws.id, layout: ws.layout, teamSize: ws.teamSize, style: ws.style, features: ws.features.length, positionsReset: ws.members.length, ...officeSummary(ws.office) }, "✅ New office saved to MongoDB");
+      live.officeChanged(ws.id, ws.office as never, { id: mid(me), name: me.displayName });
       return reply.send(officeView(ws, me, req.user!));
     },
   );
@@ -374,10 +389,16 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     if (me.role === "owner") {
       await WorkspaceModel.deleteOne({ _id: ws._id });
       const notices = await NoticeModel.deleteMany({ workspaceId: ws._id });
-      req.log.info({ id: ws.id, name: ws.name, user: req.user!.email, members: ws.members.length, notices: notices.deletedCount }, "🗑️  Workspace deleted");
+      const messages = await deleteMessages(ws._id);
+      live.closeSpace(ws.id, "The workspace was deleted");
+      // Burn its ownership token.
+      syncWorkspace(ws._id);
+      req.log.info({ id: ws.id, name: ws.name, user: req.user!.email, members: ws.members.length, notices: notices.deletedCount, messages: messages.deletedCount }, "🗑️  Workspace deleted");
       return reply.send({ deleted: true });
     }
     await WorkspaceModel.updateOne({ _id: ws._id }, { $pull: { members: { userId: me.userId } } });
+    syncWorkspace(ws._id);
+    live.kick(ws.id, mid(me), "You left the workspace");
     req.log.info({ id: ws.id, user: req.user!.email, role: me.role, freedDesk: deskLabel(me.desk) }, "🚪 Member left workspace");
     return reply.send({ left: true });
   });
@@ -446,6 +467,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         return reply.send({ workspaceId: updated.id, memberId: mid(member), workspace: publicView(updated), alreadyMember: true });
       }
       await saveDesks(updated, assignDesks(updated), "member joined", req.log);
+      // A new member's linked wallet may receive the ownership token.
+      syncWorkspace(updated._id);
       req.log.info(
         {
           id: updated.id,
@@ -467,7 +490,8 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     const found = await memberWorkspace(req.params.id, req.user!.id, req.log);
     if (!found) return reply.code(404).send(NOT_FOUND);
     const { ws, me } = found;
-    const members = ws.members.map((m) => memberView(m, req.user!.id));
+    const online = live.online(ws.id);
+    const members = ws.members.map((m) => ({ ...memberView(m, req.user!.id), online: online.has(mid(m)) }));
     const invitations = canManage(me.role) ? invitationsView(ws) : undefined;
     // Swap requests go stale when someone moves or leaves; tidy them up here.
     const stale = staleRequests(ws);
@@ -477,7 +501,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
     }
     const deskRequests = deskRequestsView(ws, me);
     req.log.info({ id: ws.id, user: req.user!.email, members: members.length, invitations: invitations?.length, deskRequests: deskRequests.length }, "👥 Members listed");
-    return reply.send({ members, invitations, deskRequests, role: me.role, desks: deskIds(ws.office).length });
+    return reply.send({ members, invitations, deskRequests, role: me.role, desks: deskIds(ws.office).length, ownership: ownershipView(ws) });
   });
 
   /** Change your own name tag or avatar in this workspace. */
@@ -510,6 +534,10 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
       await WorkspaceModel.updateOne({ _id: ws._id, "members._id": me._id }, { $set: set });
       const from = { displayName: me.displayName, avatarId: me.avatarId };
       req.log.info({ id: ws.id, user: req.user!.email, from, to: req.body }, "🪪 Member profile saved to MongoDB");
+      live.update(ws.id, mid(me), {
+        ...(set["members.$.displayName"] ? { name: set["members.$.displayName"] } : {}),
+        ...(set["members.$.avatarId"] ? { avatarId: set["members.$.avatarId"] } : {}),
+      });
       return reply.send({
         memberId: mid(me),
         displayName: set["members.$.displayName"] ?? me.displayName,
@@ -545,6 +573,7 @@ export const workspaceRoutes: FastifyPluginAsync = async (app) => {
         { id: ws.id, member: me.displayName, from: me.status, to: req.body.status, ...(focusMs ? { focusedMinutes: Math.round(focusMs / 60000) } : {}) },
         "🟢 Status saved to MongoDB",
       );
+      live.update(ws.id, mid(me), { status: req.body.status });
       return reply.send({ status: req.body.status, statusUpdatedAt: now });
     },
   );

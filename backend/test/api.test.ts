@@ -10,7 +10,9 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { once } from "node:events";
 import mongoose from "mongoose";
+import WebSocket from "ws";
 import { connectDb } from "../src/db.ts";
 import { outbox } from "../src/lib/mailer.ts";
 import { buildApp } from "../src/server.ts";
@@ -19,6 +21,16 @@ import { UserModel } from "../src/models/User.ts";
 import { WaitlistModel } from "../src/models/Waitlist.ts";
 import { WorkspaceModel } from "../src/models/Workspace.ts";
 import { NoticeModel } from "../src/models/Notice.ts";
+import { MessageModel } from "../src/models/Message.ts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { createSiweMessage } from "viem/siwe";
+import { FakeChain } from "./fakeChain.ts";
+import { onchainIdle, pollTransfers, useChain } from "../src/lib/ownership.ts";
+import { tokenIdOf } from "../src/lib/chain.ts";
+import { ChainCursorModel } from "../src/models/ChainCursor.ts";
+import { FakeDecor } from "./fakeDecor.ts";
+import { syncDecor, useDecorChain } from "../src/lib/decor.ts";
+import { DecorItemModel, DecorTokenModel } from "../src/models/Decor.ts";
 import { catalog } from "@/components/office/game/furniture";
 import { groupOf, isMovable, placementProblem, unreachable, type FurnitureMeta } from "@/components/office/game/layoutEdit";
 
@@ -74,6 +86,7 @@ after(async () => {
   // Remove only what this run created.
   const mine = await WorkspaceModel.find({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] }, { _id: 1 });
   const notices = await NoticeModel.deleteMany({ workspaceId: { $in: mine.map((w) => w._id) } });
+  await MessageModel.deleteMany({ workspaceId: { $in: mine.map((w) => w._id) } });
   const ws = await WorkspaceModel.deleteMany({ $or: [{ "members.userId": { $in: userIds } }, { name: new RegExp(`^Test .*${RUN}$`) }] });
   const sessions = await SessionModel.deleteMany({ userId: { $in: userIds } });
   const users = await UserModel.deleteMany({ email: new RegExp(`\\.${RUN}@thespace\\.test$`) });
@@ -137,6 +150,120 @@ describe("auth", () => {
     const s = await call("POST", "/api/auth/signin", undefined, { email: alice.email, password: PASSWORD });
     await call("POST", "/api/auth/signout", s.cookie, {});
     assert.equal((await call("GET", "/api/workspaces/mine", s.cookie)).status, 401);
+  });
+});
+
+describe("wallet sign-in (SIWE, EIP-4361)", () => {
+  let carol: Awaited<ReturnType<typeof newUser>>;
+  const wallet = privateKeyToAccount(generatePrivateKey());
+  const FRONTEND = "http://localhost:3000";
+
+  /** Ask for a nonce and sign a SIWE message with `account`, as the browser would. */
+  async function signed(account = wallet, tweak: Partial<Parameters<typeof createSiweMessage>[0]> = {}) {
+    const { body } = await call("GET", "/api/auth/wallet/nonce");
+    const message = createSiweMessage({
+      address: account.address,
+      chainId: 84532,
+      domain: "localhost:3000",
+      uri: FRONTEND,
+      scheme: "http",
+      nonce: body.nonce,
+      version: "1",
+      issuedAt: new Date(),
+      statement: "Sign in to TheSpace.",
+      ...tweak,
+    });
+    return { message, signature: await account.signMessage({ message }) };
+  }
+
+  it("hands out a fresh nonce each time", async () => {
+    const a = await call("GET", "/api/auth/wallet/nonce");
+    const b = await call("GET", "/api/auth/wallet/nonce");
+    assert.equal(a.status, 200);
+    assert.match(a.body.nonce, /^[a-zA-Z0-9]{8,}$/);
+    assert.notEqual(a.body.nonce, b.body.nonce);
+  });
+
+  it("won't sign in with a wallet no account is linked to", async () => {
+    const r = await call("POST", "/api/auth/wallet/signin", undefined, await signed());
+    assert.equal(r.status, 404);
+    assert.equal(r.body.noAccount, true);
+    assert.equal(r.cookie, undefined);
+  });
+
+  it("links a wallet to a signed-in account", async () => {
+    carol = await newUser("wallety");
+    assert.equal((await call("GET", "/api/auth/me", carol.cookie)).body.user.wallet, null);
+    assert.equal((await call("POST", "/api/auth/wallet/link", undefined, await signed())).status, 401, "needs a session");
+    const r = await call("POST", "/api/auth/wallet/link", carol.cookie, await signed());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.user.wallet, wallet.address);
+    assert.equal((await call("GET", "/api/auth/me", carol.cookie)).body.user.wallet, wallet.address);
+  });
+
+  it("signs in with the linked wallet", async () => {
+    const r = await call("POST", "/api/auth/wallet/signin", undefined, await signed());
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.user.email, carol.email);
+    assert.ok(r.cookie);
+    const me = await call("GET", "/api/auth/me", r.cookie);
+    assert.equal(me.body.user.id, carol.id);
+  });
+
+  it("rejects a replayed signature (nonce is single-use)", async () => {
+    const once = await signed();
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, once)).status, 200);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, once)).status, 401);
+  });
+
+  it("rejects forged, tampered and made-up messages", async () => {
+    // Signed by someone else, claiming carol's address.
+    const thief = privateKeyToAccount(generatePrivateKey());
+    const forged = await signed(wallet);
+    forged.signature = await thief.signMessage({ message: forged.message });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, forged)).status, 401);
+
+    // Message changed after signing.
+    const tampered = await signed();
+    tampered.message = tampered.message.replace("Sign in to TheSpace.", "Sign in to TheSpace!");
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, tampered)).status, 401);
+
+    // A nonce the server never issued.
+    const message = createSiweMessage({ address: wallet.address, chainId: 1, domain: "localhost:3000", uri: FRONTEND, scheme: "http", nonce: "madeup123456", version: "1" });
+    const madeUp = { message, signature: await wallet.signMessage({ message }) };
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, madeUp)).status, 401);
+
+    // Expired message.
+    const expired = await signed(wallet, { expirationTime: new Date(Date.now() - 1000) });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, expired)).status, 401);
+
+    // Garbage.
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, { message: "hello", signature: "0x1234" })).status, 401);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, { message: "hello", signature: "nope" })).status, 400);
+  });
+
+  it("rejects a message made for another site (phishing)", async () => {
+    const evil = await signed(wallet, { domain: "evil.example", uri: "https://evil.example" });
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, evil)).status, 401);
+    // Right message, but sent from a different page.
+    const ours = await signed();
+    const res = await app.inject({ method: "POST", url: "/api/auth/wallet/signin", remoteAddress: ip(), headers: { origin: "http://127.0.0.1:3000" }, payload: ours });
+    assert.equal(res.statusCode, 401);
+  });
+
+  it("won't link one wallet to two accounts", async () => {
+    const dave = await newUser("wallety2");
+    const r = await call("POST", "/api/auth/wallet/link", dave.cookie, await signed());
+    assert.equal(r.status, 409);
+    assert.equal((await call("GET", "/api/auth/me", dave.cookie)).body.user.wallet, null);
+  });
+
+  it("unlinks the wallet; email sign-in still works", async () => {
+    const r = await call("DELETE", "/api/auth/wallet", carol.cookie);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.user.wallet, null);
+    assert.equal((await call("POST", "/api/auth/wallet/signin", undefined, await signed())).status, 404);
+    assert.equal((await call("POST", "/api/auth/signin", undefined, { email: carol.email, password: PASSWORD })).status, 200);
   });
 });
 
@@ -662,5 +789,499 @@ describe("office life", () => {
   it("deletes the board with the workspace", async () => {
     assert.equal((await call("DELETE", base(), owner.cookie)).status, 200);
     assert.equal(await NoticeModel.countDocuments({ workspaceId: id }), 0);
+  });
+});
+
+describe("live office", () => {
+  let owner: Awaited<ReturnType<typeof newUser>>;
+  let kai: Awaited<ReturnType<typeof newUser>>;
+  let outsider: Awaited<ReturnType<typeof newUser>>;
+  let id = "";
+  const base = () => `/api/workspaces/${id}`;
+  const ORIGIN = "http://localhost:3000";
+
+  // A real socket on a random local port. (`app.injectWS` sends Sec-WebSocket-Version as a
+  // number, which ws ≥ 8.23 rejects with a 400 — browsers send it as text, so the app is fine.)
+  let liveUrl = "";
+
+  /** Open the live socket as someone; `next` waits for the first frame of a type (and matching `pred`). */
+  async function connect(cookie: string, origin = ORIGIN) {
+    liveUrl ||= (await app.listen({ port: 0, host: "127.0.0.1" })).replace(/^http/, "ws");
+    const ws = new WebSocket(`${liveUrl}${base()}/live`, { headers: { cookie, origin } });
+    const inbox: any[] = [];
+    const media: Buffer[] = [];
+    let closed: number | null = null;
+    // Listen before the socket opens, so the welcome frame is never missed.
+    ws.on("message", (d: Buffer, isBinary: boolean) => (isBinary ? media.push(d) : inbox.push(JSON.parse(String(d)))));
+    ws.on("close", (code: number) => (closed = code));
+    await once(ws, "open");
+    const next = (t: string, pred: (m: any) => boolean = () => true, ms = 3000) =>
+      new Promise<any>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => {
+          const i = inbox.findIndex((m) => m.t === t && pred(m));
+          if (i >= 0) return resolve(inbox.splice(i, 1)[0]);
+          if (Date.now() - started > ms) return reject(new Error(`no "${t}" frame within ${ms}ms (got ${inbox.map((m) => m.t).join(", ") || "nothing"})`));
+          setTimeout(look, 20);
+        };
+        look();
+      });
+    const closedWith = (ms = 3000) =>
+      new Promise<number>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => (closed !== null ? resolve(closed) : Date.now() - started > ms ? reject(new Error("socket stayed open")) : setTimeout(look, 20));
+        look();
+      });
+    /** Wait for a relayed voice/video frame. */
+    const nextMedia = (ms = 3000) =>
+      new Promise<Buffer>((resolve, reject) => {
+        const started = Date.now();
+        const look = () => (media.length ? resolve(media.shift()!) : Date.now() - started > ms ? reject(new Error("no media frame")) : setTimeout(look, 20));
+        look();
+      });
+    return { ws, next, nextMedia, media, closedWith, send: (m: object) => ws.send(JSON.stringify(m)) };
+  }
+
+  before(async () => {
+    [owner, kai, outsider] = [await newUser("liveowner"), await newUser("kai"), await newUser("outsider")];
+    const r = await call("POST", "/api/workspaces", owner.cookie, {
+      displayName: "Lou",
+      avatarId: "buddy-maya",
+      workspaceName: `Test Live ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "6-15",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+      officeFeatures: ["desks", "kitchen", "plants", "seating", "office", "meeting"],
+      invitationEmails: [],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    id = r.body.workspaceId;
+    await call("GET", `${base()}/office`, owner.cookie);
+    const j = await call("POST", "/api/workspaces/join", kai.cookie, { displayName: "Kai", avatarId: "buddy-theo", invitationCode: r.body.inviteCode });
+    assert.equal(j.status, 201);
+  });
+
+  it("refuses sockets from other sites", async () => {
+    const evil = await connect(owner.cookie, "https://evil.example");
+    assert.equal(await evil.closedWith(), 4403);
+  });
+
+  it("shows who is here, how they move, what they say and their status", async () => {
+    const lou = await connect(owner.cookie);
+    const hello = await lou.next("welcome");
+    assert.deepEqual(hello.peers, [], "nobody else is in yet");
+
+    const k = await connect(kai.cookie);
+    const kHello = await k.next("welcome");
+    assert.deepEqual(kHello.peers.map((p: any) => p.name), ["Lou"]);
+    const joined = await lou.next("join");
+    assert.equal(joined.peer.name, "Kai");
+    const kaiId = joined.peer.id;
+
+    const members = await call("GET", `${base()}/members`, owner.cookie);
+    assert.ok(members.body.members.every((m: any) => m.online), "both show as in the office");
+
+    k.send({ t: "move", x: joined.peer.x + 4, y: joined.peer.y, frame: 21, anim: "walk-side", flip: true, depth: joined.peer.y, room: "Entrance" });
+    const moved = await lou.next("move", (m) => m.id === kaiId);
+    assert.equal(moved.anim, "walk-side");
+    assert.equal(moved.room, "Entrance");
+
+    // Both stand near the door, so Lou hears Kai.
+    k.send({ t: "say", text: "  morning!  " });
+    assert.equal((await lou.next("say")).text, "morning!");
+
+    await call("PATCH", `${base()}/me/status`, kai.cookie, { status: "focusing" });
+    const status = await lou.next("peer", (m) => m.id === kaiId && m.patch.status);
+    assert.equal(status.patch.status, "focusing");
+
+    k.ws.close();
+    assert.equal((await lou.next("leave")).id, kaiId);
+    lou.ws.close();
+  });
+
+  it("keeps one live connection per member (a new tab takes over)", async () => {
+    const first = await connect(kai.cookie);
+    await first.next("welcome");
+    const second = await connect(kai.cookie);
+    await second.next("welcome");
+    assert.equal(await first.closedWith(), 4409);
+    second.ws.close();
+  });
+
+  it("relays a speaker's voice to nearby teammates (even with their own mic off), tagged with who's talking", async () => {
+    const lou = await connect(owner.cookie);
+    await lou.next("welcome");
+    const k = await connect(kai.cookie);
+    const louId = (await k.next("welcome")).peers[0].id;
+    const kaiId = (await lou.next("join")).peer.id;
+    const audio = Buffer.from([1, ...Array.from({ length: 640 }, (_, i) => i % 256)]);
+
+    // Kai's mic is off: nothing is relayed from him.
+    k.ws.send(audio);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "a muted mic sends nothing");
+
+    // Kai turns his mic on; Lou hears him with his own mic still off.
+    k.send({ t: "voice", on: true });
+    await lou.next("peer", (m) => m.id === kaiId && m.patch.voice === true);
+    k.ws.send(audio);
+    const frame = await lou.nextMedia();
+    assert.equal(frame[0], 1, "audio frame");
+    assert.equal(frame.subarray(1, 25).toString("ascii"), kaiId, "tagged with the speaker");
+    assert.deepEqual(frame.subarray(25), audio.subarray(1));
+
+    // Once Kai reaches Lou over a direct WebRTC link, the server stops relaying to him.
+    k.send({ t: "direct", ids: [louId] });
+    await new Promise((r) => setTimeout(r, 50));
+    k.ws.send(audio);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "no relay for direct pairs");
+    k.send({ t: "direct", ids: [] });
+
+    // WebRTC offers are passed on only between the two ends of a link.
+    const link = `prox:${[kaiId, louId].sort().join(":")}`;
+    k.send({ t: "signal", to: louId, link, data: { kind: "offer", sdp: "v=0" } });
+    const offer = await lou.next("signal");
+    assert.equal(offer.from, kaiId);
+    assert.equal(offer.data.kind, "offer");
+
+    // Video only goes to a call.
+    k.ws.send(Buffer.from([2, 0xff, 0xd8, 0xff]));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(lou.media.length, 0, "no video outside a call");
+    k.ws.close();
+    lou.ws.close();
+  });
+
+  it("only lets people in a call room's call", async () => {
+    const lou = await connect(owner.cookie);
+    const hello = await lou.next("welcome");
+    lou.send({ t: "call", room: "Kitchen" });
+    assert.match((await lou.next("error")).message, /meeting room/);
+    const room = hello.callRooms[0];
+    if (room) {
+      lou.send({ t: "call", room });
+      const joined = await lou.next("peer", (m) => m.patch.call !== undefined);
+      assert.equal(joined.patch.call, room);
+    }
+    lou.ws.close();
+  });
+
+  it("saves workspace chat per channel and sends it live", async () => {
+    const lou = await connect(owner.cookie);
+    await lou.next("welcome");
+    const first = await call("GET", `${base()}/messages`, kai.cookie);
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.deepEqual(first.body.messages, []);
+    assert.equal(first.body.channels[0], "office");
+    assert.ok(first.body.channels.length > 1, "every room has a channel");
+
+    const sent = await call("POST", `${base()}/messages`, kai.cookie, { channel: "office", text: "  Coffee in 5?  " });
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    assert.equal(sent.body.message.text, "Coffee in 5?");
+    assert.equal(sent.body.message.authorName, "Kai");
+    assert.equal((await lou.next("chat")).message.messageId, sent.body.message.messageId);
+
+    const roomChannel = first.body.channels[1];
+    assert.equal((await call("POST", `${base()}/messages`, owner.cookie, { channel: roomChannel, text: "Room only" })).status, 201);
+    const office = await call("GET", `${base()}/messages?channel=office`, owner.cookie);
+    assert.deepEqual(office.body.messages.map((m: any) => m.text), ["Coffee in 5?"], "room messages stay in their room");
+    const inRoom = await call("GET", `${base()}/messages?channel=${encodeURIComponent(roomChannel)}`, owner.cookie);
+    assert.deepEqual(inRoom.body.messages.map((m: any) => m.text), ["Room only"]);
+
+    assert.equal((await call("POST", `${base()}/messages`, kai.cookie, { channel: "Narnia", text: "hi" })).status, 404, "unknown room");
+    assert.equal((await call("POST", `${base()}/messages`, kai.cookie, { channel: "office", text: "   " })).status, 400, "no empty messages");
+    assert.equal((await call("GET", `${base()}/messages`, outsider.cookie)).status, 404, "only members read the chat");
+    lou.ws.close();
+  });
+});
+
+
+describe("workspace ownership NFT", () => {
+  const appWallet = privateKeyToAccount(generatePrivateKey());
+  const oliveWallet = privateKeyToAccount(generatePrivateKey());
+  const bobWallet = privateKeyToAccount(generatePrivateKey());
+  const stranger = privateKeyToAccount(generatePrivateKey()).address;
+  // A fresh "contract" per run, so the saved block cursor is this run's own.
+  const chain = new FakeChain(appWallet.address, privateKeyToAccount(generatePrivateKey()).address);
+  let olive: Awaited<ReturnType<typeof newUser>>;
+  let bob: Awaited<ReturnType<typeof newUser>>;
+  let id = "";
+  let bobId = "";
+  const base = () => `/api/workspaces/${id}`;
+  const token = () => tokenIdOf(id);
+  const ownership = async (cookie = olive.cookie) => (await call("GET", `${base()}/members`, cookie)).body.ownership;
+  const roles = async () => Object.fromEntries((await call("GET", `${base()}/members`, olive.cookie)).body.members.map((m: any) => [m.displayName, m.role]));
+
+  /** Link `account` to the signed-in user with a SIWE signature, as the dashboard does. */
+  async function link(cookie: string, account: typeof oliveWallet) {
+    const { body } = await call("GET", "/api/auth/wallet/nonce");
+    const message = createSiweMessage({ address: account.address, chainId: 43113, domain: "localhost:3000", uri: "http://localhost:3000", scheme: "http", nonce: body.nonce, version: "1", issuedAt: new Date() });
+    const r = await call("POST", "/api/auth/wallet/link", cookie, { message, signature: await account.signMessage({ message }) });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+  }
+
+  before(async () => {
+    [olive, bob] = [await newUser("nftowner"), await newUser("nftbob")];
+    useChain(chain);
+    await pollTransfers(); // start watching from "now"
+  });
+  after(async () => {
+    await onchainIdle();
+    useChain(null);
+    await ChainCursorModel.deleteOne({ _id: `${chain.chainId}:${chain.contract.toLowerCase()}` });
+  });
+
+  it("mints the token into the app's custody when a workspace is created", async () => {
+    const r = await call("POST", "/api/workspaces", olive.cookie, {
+      displayName: "Olive",
+      avatarId: "buddy-maya",
+      workspaceName: `Test NFT ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "2-5",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    id = r.body.workspaceId;
+    await onchainIdle();
+    assert.equal(await chain.ownerOf(token()), appWallet.address);
+    const o = await ownership();
+    assert.equal(o.tokenId, `0x${id}`);
+    assert.equal(o.minted, true);
+    assert.equal(o.inCustody, true);
+    assert.equal(o.error, null);
+    assert.equal(o.url, `https://testnet.snowtrace.io/nft/${chain.contract}/${token()}`);
+  });
+
+  it("moves it to the owner's wallet once they link one", async () => {
+    await link(olive.cookie, oliveWallet);
+    await onchainIdle();
+    assert.equal(await chain.ownerOf(token()), oliveWallet.address);
+    assert.equal(chain.isAllowed(token(), oliveWallet.address), true);
+    const o = await ownership();
+    assert.equal(o.inCustody, false);
+    assert.equal(o.holder, oliveWallet.address);
+  });
+
+  it("approves members' wallets, and refuses sending it to anyone else", async () => {
+    const code = (await call("GET", `${base()}/invite`, olive.cookie)).body.code;
+    const join = await call("POST", "/api/workspaces/join", bob.cookie, { displayName: "Bob", avatarId: "buddy-theo", invitationCode: code });
+    assert.equal(join.status, 201);
+    bobId = join.body.memberId;
+    await link(bob.cookie, bobWallet);
+    await onchainIdle();
+    assert.equal(chain.isAllowed(token(), bobWallet.address), true);
+    assert.throws(() => chain.holderSends(oliveWallet.address, stranger, token()), /RecipientNotMember/);
+    assert.equal(await chain.ownerOf(token()), oliveWallet.address);
+  });
+
+  it("follows an ownership transfer made in the app", async () => {
+    const r = await call("POST", `${base()}/transfer`, olive.cookie, { memberId: bobId });
+    assert.equal(r.status, 200);
+    await onchainIdle();
+    assert.equal(await chain.ownerOf(token()), bobWallet.address);
+    // The app's own move shows up in the watcher too, and must not undo anything.
+    await pollTransfers();
+    assert.deepEqual(await roles(), { Olive: "admin", Bob: "owner" });
+  });
+
+  it("makes the new holder the owner when the token is sent on chain", async () => {
+    chain.holderSends(bobWallet.address, oliveWallet.address, token());
+    await pollTransfers();
+    await onchainIdle();
+    assert.deepEqual(await roles(), { Olive: "owner", Bob: "admin" });
+    assert.ok(outbox.some((m) => m.to === olive.email && m.subject.startsWith("You now own")), "new owner gets an email");
+    assert.equal(await chain.ownerOf(token()), oliveWallet.address);
+    // Reading the same blocks again changes nothing.
+    const writes = chain.writes.length;
+    await pollTransfers();
+    await onchainIdle();
+    assert.equal(chain.writes.length, writes);
+  });
+
+  it("revokes a member's wallet when they leave", async () => {
+    assert.equal((await call("DELETE", base(), bob.cookie)).body.left, true);
+    await onchainIdle();
+    assert.equal(chain.isAllowed(token(), bobWallet.address), false);
+  });
+
+  it("takes the token back into custody when the owner unlinks their wallet", async () => {
+    assert.equal((await call("DELETE", "/api/auth/wallet", olive.cookie)).status, 200);
+    await onchainIdle();
+    assert.equal(await chain.ownerOf(token()), appWallet.address);
+    assert.equal(chain.isAllowed(token(), oliveWallet.address), false);
+    assert.equal((await ownership()).inCustody, true);
+  });
+
+  it("burns the token when the workspace is deleted", async () => {
+    const tid = token();
+    assert.equal((await call("DELETE", base(), olive.cookie)).body.deleted, true);
+    await onchainIdle();
+    assert.equal(await chain.exists(tid), false);
+  });
+
+  it("shows no token when on-chain ownership is off", async () => {
+    useChain(null);
+    const r = await call("POST", "/api/workspaces", olive.cookie, {
+      displayName: "Olive",
+      avatarId: "buddy-maya",
+      workspaceName: `Test Plain ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "2-5",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+    });
+    assert.equal(r.status, 201);
+    id = r.body.workspaceId;
+    assert.equal(await ownership(), null);
+    assert.equal(await chain.exists(token()), false);
+  });
+});
+
+describe("NFT decor market", () => {
+  const oliveWallet = privateKeyToAccount(generatePrivateKey());
+  const bobWallet = privateKeyToAccount(generatePrivateKey());
+  const decor = new FakeDecor(privateKeyToAccount(generatePrivateKey()).address);
+  const CENT = 10n ** 16n; // 0.01 AVAX
+  let olive: Awaited<ReturnType<typeof newUser>>;
+  let bob: Awaited<ReturnType<typeof newUser>>;
+  let id = "";
+  const base = () => `/api/workspaces/${id}`;
+  const market = async (cookie = olive.cookie) => (await call("GET", "/api/market", cookie)).body;
+  const mine = async (cookie: string) => (await call("GET", "/api/market/mine", cookie)).body.tokens;
+  const placed = async () =>
+    (await call("GET", `${base()}/office`, olive.cookie)).body.office.objects.filter((o: any) => o.nft).map((o: any) => o.nft.tokenId);
+  const sync = async (cookie = olive.cookie) => assert.equal((await call("POST", "/api/market/sync", cookie)).status, 200);
+
+  async function link(cookie: string, account: typeof oliveWallet) {
+    const { body } = await call("GET", "/api/auth/wallet/nonce");
+    const message = createSiweMessage({ address: account.address, chainId: 43113, domain: "localhost:3000", uri: "http://localhost:3000", scheme: "http", nonce: body.nonce, version: "1", issuedAt: new Date() });
+    assert.equal((await call("POST", "/api/auth/wallet/link", cookie, { message, signature: await account.signMessage({ message }) })).status, 200);
+  }
+
+  before(async () => {
+    [olive, bob] = [await newUser("decorolive"), await newUser("decorbob")];
+    decor.addItem("Golden Monstera", "plant", CENT);
+    decor.addItem("Neon Floor Lamp", "lamp", 2n * CENT);
+    decor.addItem("Spaceship", "spaceship", CENT); // not office furniture: hidden
+    useDecorChain(decor);
+    await syncDecor(); // the first run reads the whole catalog
+  });
+  after(async () => {
+    useDecorChain(null);
+    const contract = decor.contract.toLowerCase();
+    await DecorItemModel.deleteMany({ contract });
+    await DecorTokenModel.deleteMany({ contract });
+    await ChainCursorModel.deleteOne({ _id: `decor:${decor.chainId}:${contract}` });
+  });
+
+  it("shows the shop catalog with prices in AVAX", async () => {
+    const m = await market();
+    assert.equal(m.enabled, true);
+    assert.equal(m.contract, decor.contract);
+    assert.deepEqual(
+      m.items.map((i: any) => [i.itemId, i.name, i.kind, i.price]),
+      [
+        [0, "Golden Monstera", "plant", "0.01"],
+        [1, "Neon Floor Lamp", "lamp", "0.02"],
+      ],
+    );
+    assert.deepEqual(m.listings, []);
+  });
+
+  it("lists what your wallet bought", async () => {
+    assert.deepEqual(await mine(olive.cookie), [], "no wallet, no decor");
+    await link(olive.cookie, oliveWallet);
+    assert.throws(() => decor.buy(oliveWallet.address, 0n, CENT - 1n), /WrongPayment/);
+    decor.buy(oliveWallet.address, 0n, CENT);
+    decor.buy(oliveWallet.address, 1n, 2n * CENT);
+    await sync();
+    const tokens = await mine(olive.cookie);
+    assert.deepEqual(
+      tokens.map((t: any) => [t.tokenId, t.name, t.listed, t.placedIn]),
+      [
+        [1, "Golden Monstera", null, null],
+        [2, "Neon Floor Lamp", null, null],
+      ],
+    );
+    assert.equal(tokens[0].url, `https://testnet.snowtrace.io/nft/${decor.contract}/1`);
+  });
+
+  it("lets the owner place decor their wallet holds in the office", async () => {
+    const r = await call("POST", "/api/workspaces", olive.cookie, {
+      displayName: "Olive",
+      avatarId: "buddy-maya",
+      workspaceName: `Test Decor ${RUN}`,
+      purpose: "remote-team",
+      teamSize: "2-5",
+      workspaceStyle: "cozy-green",
+      officeLayout: "classic",
+    });
+    id = r.body.workspaceId;
+    const put = await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 1 });
+    assert.equal(put.status, 201, JSON.stringify(put.body));
+    assert.equal(put.body.kind, "plant");
+    assert.deepEqual(await placed(), [1]);
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 1 })).status, 409, "only once");
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 99 })).status, 404, "not hers");
+    assert.deepEqual((await mine(olive.cookie))[0].placedIn, { workspaceId: id, name: `Test Decor ${RUN}` });
+
+    // Members can't decorate.
+    const code = (await call("GET", `${base()}/invite`, olive.cookie)).body.code;
+    await call("POST", "/api/workspaces/join", bob.cookie, { displayName: "Bob", avatarId: "buddy-theo", invitationCode: code });
+    assert.equal((await call("POST", `${base()}/decor`, bob.cookie, { tokenId: 2 })).status, 403);
+  });
+
+  it("takes decor out of the office", async () => {
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 2 })).status, 201);
+    assert.deepEqual((await placed()).sort(), [1, 2]);
+    assert.equal((await call("DELETE", `${base()}/decor/2`, olive.cookie)).status, 200);
+    assert.deepEqual(await placed(), [1]);
+    assert.equal((await call("DELETE", `${base()}/decor/2`, olive.cookie)).status, 404);
+  });
+
+  it("listing decor for sale takes it out of the office; cancelling gives it back", async () => {
+    decor.list(oliveWallet.address, 1n, 5n * CENT);
+    await sync();
+    assert.deepEqual(await placed(), [], "a listed piece isn't in her wallet any more");
+    const m = await market();
+    assert.deepEqual(
+      m.listings.map((l: any) => [l.tokenId, l.name, l.price, l.mine, l.seller]),
+      [[1, "Golden Monstera", "0.05", true, oliveWallet.address]],
+    );
+    assert.deepEqual((await mine(olive.cookie)).find((t: any) => t.tokenId === 1).listed, { priceWei: (5n * CENT).toString(), price: "0.05" });
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 1 })).status, 404, "can't place a listed piece");
+
+    decor.cancel(oliveWallet.address, 1n);
+    await sync();
+    assert.equal((await market()).listings.length, 0);
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 1 })).status, 201);
+  });
+
+  it("selling it on the market moves it to the buyer and out of the office", async () => {
+    await link(bob.cookie, bobWallet);
+    decor.list(oliveWallet.address, 1n, 3n * CENT);
+    await sync(bob.cookie);
+    assert.equal((await market(bob.cookie)).listings[0].mine, false);
+    decor.buyListing(bobWallet.address, 1n, 3n * CENT);
+    await sync(bob.cookie);
+    assert.deepEqual(await placed(), []);
+    assert.deepEqual((await mine(bob.cookie)).map((t: any) => t.tokenId), [1]);
+    assert.deepEqual((await mine(olive.cookie)).map((t: any) => t.tokenId), [2]);
+  });
+
+  it("takes decor out of the office when the owner unlinks their wallet", async () => {
+    assert.equal((await call("POST", `${base()}/decor`, olive.cookie, { tokenId: 2 })).status, 201);
+    assert.equal((await call("DELETE", "/api/auth/wallet", olive.cookie)).status, 200);
+    assert.deepEqual(await placed(), []);
+  });
+
+  it("is off without a decor contract", async () => {
+    useDecorChain(null);
+    assert.deepEqual(await market(), { enabled: false });
+    assert.equal((await call("POST", "/api/market/sync", olive.cookie)).status, 404);
+    useDecorChain(decor);
   });
 });

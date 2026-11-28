@@ -44,7 +44,35 @@ npm test
 | `LOG_LEVEL` | Log level (default `info`; `debug`, `warn`, `silent`…) |
 | `LOG_REQUESTS` | `off` hides the one-line access log for each request |
 
-The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
+`backend/.env.example` lists every backend setting with a comment (copy it to `backend/.env`). `CLIENT_ORIGIN` accepts `*` for any subdomain, e.g. `https://*.ngrok-free.app`.
+
+`frontend/main.env` (copy `frontend/main.env.example`; read by `next.config.ts`):
+
+| Variable | What it's for |
+|---|---|
+| `API_INTERNAL_URL` | Where the frontend forwards `/api` — REST and the live WebSocket (default `http://127.0.0.1:4000`) |
+| `NEXT_PUBLIC_API_URL` | Where the browser calls the API. Empty = automatic: `http://localhost:4000` on localhost, the page's own address (`/api`) through ngrok. Set it only for an API on its own public domain |
+| `NEXT_PUBLIC_STUN_URLS` | STUN servers for direct voice/video (default Google's public one); `off` = everything through the API relay |
+| `DEV_ORIGINS` | Extra hosts allowed to open the dev site (ngrok hosts already are) |
+
+### Open the office on another device (ngrok)
+
+Only the frontend is tunnelled; it forwards `/api` (and the live WebSocket) to your backend, so cookies, the live office and the mic/camera (HTTPS) all work on one address.
+
+```bash
+cd backend && npm run dev      # the API on :4000
+cd frontend && npm run dev     # the site on :3000
+ngrok http 3000                # open the https://… link on the other device
+```
+
+Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to point there.
+
+### Voice & video: direct first, relay as a fallback (no TURN)
+
+- **Direct (lowest latency, ~50–100 ms):** each pair of browsers first tries a WebRTC connection, signalled over the live socket, using a public STUN server to find each other. Calls get real video, and the browser's echo cancellation works fully.
+- **Relay (works anywhere):** if a pair hasn't connected directly within 6 s (strict firewalls, some VPNs and mobile networks), its media goes over the live WebSocket instead and the API passes it on. No TURN server needed. Voice: 16 kHz µ-law in 20 ms frames, sent only while you talk, played through a 60 ms jitter buffer. Video: 320×180 JPEG snapshots, 8 a second. A failed pair tries direct again after 45 s.
+- Each browser tells the API which teammates it reaches directly (`direct`), so the API doesn't also relay to them and nobody hears double.
+- Browsers only allow the mic and camera on HTTPS (or `localhost`). Headphones avoid echo.
 
 ---
 
@@ -113,6 +141,18 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
   - Pieces must stay inside the walls, off other furniture and off the entrance, and can't box off anything you can use; the server checks the same rules (shared code in `game/layoutEdit.ts`)
   - Every move says where the piece was, and saves are versioned, so a tab with an older layout can't scramble the office. Changing the floor plan, style or furniture rebuilds the office as before
 
+### Real-time (multiplayer)
+- [x] **Live office socket** (`GET /api/workspaces/:id/live`, `@fastify/websocket`): signed in with the session cookie, and the page's Origin must be our frontend (CORS doesn't cover sockets). One connection per member: opening the office in a second tab takes over ("Use this tab" brings it back). Reconnects with backoff when the network drops; dead sockets are dropped by a 25 s ping
+- [x] **Presence**: teammates' avatars walk around your office in real time (their own avatar, animation, facing, sitting at desks/sofas), with name tags, status dots and markers on the minimap. The HUD shows how many people are here; *People* in the chat lists everyone with their status and room. The members panel says who is "in the office now", and last seen is saved when someone leaves
+- [x] Status, name tag and avatar changes show up for everyone straight away; when the owner rebuilds the office or moves furniture, everyone else's office reloads with it
+- [x] **Proximity chat**: the *Nearby* tab says things out loud; only people within 6 tiles get it, as a speech bubble over your avatar (not saved)
+- [x] **Proximity voice** (🎤 button): with your mic on you hear teammates who also have it on when you walk up to them, louder the closer you are; walk away and it fades out. Direct WebRTC between browsers, or relayed by the API when that's blocked (see *Voice & video*); the 🎤 badge shows how many people you're hearing
+- [x] **Works behind strict firewalls** without a TURN server: pairs that can't connect directly fall back to the API relaying their media over the same WebSocket
+- [x] **Video calls** in the meeting room and call/phone booths: walk up to the table or booth, press E and *Start / Join the video call*. Everyone in that room's call hears and sees everyone (up to 8), with mute, camera off and leave; no camera joins with sound only. Walking out of the room hangs up
+- [x] **Workspace chat** (`messages` collection): an *Office* channel for everyone and one channel per room of the office (the tab follows the room you're standing in). History loads 50 at a time; new messages arrive live, with an unread badge on 💬. Press Enter to open the chat; typing pauses your avatar. Up to 500 characters, 10 messages per 10 s; deleted with the workspace
+- [x] Rate limits on the socket too (moves, speech, voice and video frames), and moves are checked against the office's size
+- [x] Protocol shared by both sides in `frontend/components/office/live/protocol.ts`
+
 ### No mock data
 - [x] Removed the demo office, guest user and the `/office-preview` page
 - [x] The office only loads from the server; with no workspace you're sent to onboarding, and with no session you're sent to sign-in
@@ -129,11 +169,11 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] Failed and rejected requests logged with the reason (request bodies hidden for auth routes)
 
 ### Tests
-- [x] `npm test` in `backend/` runs 33 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
-- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting, the notice board, office stats (coffee/cat counting, focus time and its cap) and moving furniture (owner only, walls, stale moves)
+- [x] `npm test` in `backend/` runs 39 end-to-end API tests (Node's test runner + `app.inject`) against the MongoDB in `.env`
+- [x] Covers auth, waitlist, creating/joining workspaces, permissions, profile, status, invitations, the invite code, roles, desks, desk swap requests, removal/ownership emails, positions, office changes, ownership transfer, leaving and deleting, the notice board, office stats (coffee/cat counting, focus time and its cap), moving furniture (owner only, walls, stale moves) and the live office (origin check, presence, movement, nearby speech, live status, one socket per member, relayed voice, no relay for direct pairs, WebRTC signalling, call rooms, chat channels)
 - [x] Emails are kept in memory during tests (`MAIL_TRANSPORT=memory`), nothing is really sent
 - [x] Uses the same database as the app, but only creates records tagged with a run id (`…@thespace.test`) and deletes exactly those afterwards
-- [x] `npm test` in `frontend/` runs 75 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, the dashboard dialogs (edit, delete/leave, members), the notice board (read-only and owner views, add/edit/pin/delete, errors, full board) and the stats panel
+- [x] `npm test` in `frontend/` runs 80 component tests (Vitest, jsdom, Testing Library) for the team panel (member/admin/owner views, desks, swap requests, roles, removal, invitations, invite code, errors), the office settings forms (name tag & avatar, style & furniture), the office HUD (status switch, music, members badge, interact button, minimap frame, name tag, toast), the swap-request polling, the dashboard dialogs (edit, delete/leave, members), the notice board (read-only and owner views, add/edit/pin/delete, errors, full board), the stats panel and the live socket client (presence, relayed media frames, reconnecting, tab takeover)
 - [x] The 👥 button in the office shows a badge with desk swap requests waiting for you (checked every 30 s and when you come back to the tab), and a toast when a new one arrives
 
 ---
@@ -180,6 +220,9 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 | GET | `/api/workspaces/:id/stats` | Coffees, cat pets and focus time: office totals, yours and each member's |
 | POST | `/api/workspaces/:id/me/stats` | Count a `coffee` or a `cat` pet |
 | PUT | `/api/workspaces/:id/office/layout` | Owner: save moved furniture (`moves`: index, kind, from, to) |
+| GET (WebSocket) | `/api/workspaces/:id/live` | The live office: presence, movement, status, proximity chat, WebRTC signalling and relayed voice/video |
+| GET | `/api/workspaces/:id/messages` | Chat in a `channel` (`office` or a room name), 50 at a time (`before` pages back), plus the channel list and who's online |
+| POST | `/api/workspaces/:id/messages` | Post `text` to a `channel`; sent live to everyone in the office |
 | POST | `/api/workspaces/:id/transfer` | Owner: hand the workspace to another member (they get an email) |
 | GET | `/api/workspaces/invitations/:code` | Check an invitation code |
 | POST | `/api/workspaces/join` | Join with an invitation code |
@@ -200,11 +243,11 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [ ] See and sign out of other sessions
 
 ### Real-time (multiplayer)
-- [ ] WebSocket server for presence: see who's online and where they are walking
-- [ ] Show teammates' avatars and live status in the office
-- [ ] Proximity chat / voice when avatars are near each other
-- [ ] Video calls in the meeting room and call booths
-- [ ] Workspace chat (`messages` collection, per room)
+- [x] WebSocket server for presence: see who's online and where they are walking
+- [x] Show teammates' avatars and live status in the office
+- [x] Proximity chat / voice when avatars are near each other
+- [x] Video calls in the meeting room and call booths
+- [x] Workspace chat (`messages` collection, per room)
 
 ### Office life
 - [x] Notice board the owner can edit (`notices` collection)
@@ -212,34 +255,53 @@ The frontend reads `NEXT_PUBLIC_API_URL` (default `http://localhost:4000`).
 - [x] Move furniture around and save the layout
 
 ### Blockchain (Web3 office)
-Everything runs on an EVM testnet first (e.g. Base Sepolia or Polygon Amoy), so nobody spends real money.
+Everything runs on **Avalanche Fuji**, a free test network, so nobody spends real money. Smart contracts are deployed from the browser with Remix: see `contracts/README.md`.
+Every blockchain feature is optional: without a wallet, the app works exactly as it does today.
 
-**Identity & access**
-- [ ] **Sign in with a wallet** (Sign-In with Ethereum, EIP-4361) next to email/password, and link a wallet to an existing account
-- [ ] **Token-gated workspaces**: the owner can let anyone holding a chosen NFT or token join, instead of (or as well as) the invitation code
-- [ ] **Workspace ownership as an NFT**: each office gets an ownership token; sending it to someone else transfers the workspace (kept in sync with the existing transfer flow)
-- [ ] Use an NFT you own as your avatar or name-tag badge (ownership checked on the server)
+**Step 1: Setup (do once)**
+- [x] Write the workspace ownership contract (`contracts/WorkspaceOwnership.sol`)
+- [ ] Make a MetaMask wallet for the app ("TheSpace app") and get free test AVAX from the faucet
+- [ ] Deploy the contract in Remix and click through the test table in `contracts/README.md`
+- [ ] Put the contract address and the app wallet's private key in `backend/.env` (never in the repo or the chat)
 
-**Badges & rewards**
-- [ ] **Achievement badges** as soulbound (non-transferable, ERC-5192) tokens, earned from office stats: 100 coffees, 10 hours of focus, first cat pet, 30-day streak
-- [ ] **Proof of attendance**: stand-ups, events and meetings in the office can mint a small attendance badge to everyone who was there
-- [ ] **Kudos**: send a teammate a thank-you token (or a testnet "coffee tip") from the members panel, with a public leaderboard
-- [ ] Badge shelf in the office and on the profile, showing your on-chain badges
+**Step 2: Wallets**
+- [x] Sign in with a wallet (MetaMask), next to email and password
+- [x] Link a wallet to an existing account, and unlink it
 
-**Team decisions**
-- [ ] **On-chain polls** on the notice board: members vote with a wallet signature (gasless, Snapshot-style), the result is final and anyone can check it
-- [ ] Optional team treasury (multisig wallet) shown in the office, with proposals voted on by members
+**Step 3: Own your office as an NFT**
+- [x] Every workspace gets one NFT; whoever holds it owns the workspace
+- [x] The backend keeps it in sync: mints it when a workspace is made, moves it when ownership is transferred in the app, burns it when the workspace is deleted
+- [x] The NFT can only be sent to members of that workspace
+- [x] Sending the NFT to a member in MetaMask makes them the owner in the app
+- [x] Members panel shows the NFT with a Snowtrace link
+- [ ] Try it end to end on Fuji once the contract is deployed
 
-**Trust & transparency**
-- [ ] **Tamper-proof audit log**: important admin actions (role changes, removals, ownership transfers, layout saves) are hashed together and the daily Merkle root is written on-chain, so the history can be checked but not rewritten
-- [ ] Office layout snapshots: save a hash of the saved office on-chain, or mint it as a collectible "office NFT"
+**Step 4: NFT decor and marketplace**
+- [x] Write the decor contract: a shop and a marketplace in one (`contracts/OfficeDecor.sol`)
+- [x] Shop: buy decor NFTs (plants, lamps, a fireplace…) with test AVAX
+- [x] Marketplace: put your decor up for sale, buy other people's, cancel a sale
+- [x] The owner places decor from their wallet in the office and moves it like furniture (it sparkles)
+- [x] If decor is sold, listed or sent away, it leaves the office by itself
+- [ ] Deploy it in Remix, run `npm run seed:decor`, and try it on Fuji
+- [ ] Later: paintings and posters for the walls, and showing who owns each piece when you walk up to it
 
-**Under the hood**
-- [ ] Smart contracts (Solidity) with Foundry or Hardhat, plus contract tests
-- [ ] Frontend wallet connect with wagmi + viem; backend reads the chain with viem and listens for events (badges minted, ownership token moved)
-- [ ] Gas sponsored for users (account abstraction, ERC-4337 paymaster), so people without crypto can still earn badges
-- [ ] No private keys in the database or the repo; the minting key lives in an env variable / secret manager
-- [ ] Every on-chain feature is optional: a workspace works exactly as today without a wallet
+**Step 5: Badges and rewards**
+- [ ] Badges you earn from office stats (100 coffees, 10 hours of focus, first cat pet, 30-day streak); badges can't be sent to anyone else
+- [ ] Attendance badge for everyone who came to a meeting or event
+- [ ] Kudos: send a teammate a thank-you token from the members panel, with a leaderboard
+- [ ] A badge shelf in the office and on your profile
+- [ ] Use an NFT you own as your avatar or name-tag badge
+
+**Step 6: Team features**
+- [ ] Token-gated join: anyone holding a chosen NFT can join, without an invite code
+- [ ] Polls on the notice board where members vote by signing with their wallet (free, no gas)
+- [ ] Optional shared team wallet, where members vote on spending
+
+**Later (nice to have)**
+- [ ] A history of admin actions (role changes, removals, transfers) that's saved on the blockchain so nobody can secretly change it
+- [ ] Save a snapshot of the office layout on the blockchain, or turn it into a collectible NFT
+- [ ] The app pays the gas fees, so people without crypto can still earn badges
+- [ ] Move the contract into a proper project (Hardhat or Foundry) with automatic tests
 
 ### Production
 - [ ] Shared rate limiter (Redis) instead of in-memory

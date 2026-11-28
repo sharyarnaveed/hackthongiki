@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, Crown, DoorOpen, LogOut, Pencil, Plus, RefreshCw, Shield, Trash2, Users } from "lucide-react";
+import { ArrowRight, Crown, DoorOpen, Gem, LogOut, Pencil, Plus, RefreshCw, Shield, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -14,10 +14,12 @@ import { forgetWorkspace, openWorkspace, storedWorkspaceId } from "@/components/
 import { resetPreparedOffice } from "@/components/office/prepare";
 import { PixelSprite } from "@/components/pixel/PixelArt";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
-import { DeleteWorkspaceDialog, EditWorkspaceDialog, MembersDialog } from "./WorkspaceDialogs";
+import { DeleteWorkspaceDialog, Dialog, EditWorkspaceDialog, MembersDialog } from "./WorkspaceDialogs";
+import { DecorMarket } from "@/components/market/DecorMarket";
+import { WalletLink } from "./WalletLink";
 import { ROLE_LABEL, type Role } from "@/components/team/service";
 
-type Me = { id: string; fullName: string; email: string };
+type Me = { id: string; fullName: string; email: string; wallet: string | null };
 
 export type WorkspaceSummary = {
   workspaceId: string;
@@ -55,6 +57,7 @@ export function Dashboard() {
   const [editing, setEditing] = useState<WorkspaceSummary | null>(null);
   const [removing, setRemoving] = useState<WorkspaceSummary | null>(null);
   const [team, setTeam] = useState<WorkspaceSummary | null>(null);
+  const [shopping, setShopping] = useState(false);
   // Something changed in the members dialog (roles, members): refresh the cards when it closes.
   const [teamChanged, setTeamChanged] = useState(false);
 
@@ -121,6 +124,22 @@ export function Dashboard() {
                   <p className="text-sm font-semibold leading-tight text-ink">{me.fullName}</p>
                   <p className="text-xs text-muted">{me.email}</p>
                 </div>
+              )}
+              {me && (
+                <WalletLink
+                  wallet={me.wallet}
+                  onChange={(wallet) => setState((s) => (s.status === "ready" ? { ...s, me: { ...s.me, wallet } } : s))}
+                />
+              )}
+              {me && (
+                <button
+                  type="button"
+                  onClick={() => setShopping(true)}
+                  className="inline-flex items-center gap-2 border-2 border-ink bg-sun px-3 py-2 text-sm font-semibold text-ink shadow-pixel-sm hover:-translate-y-0.5"
+                >
+                  <Gem className="size-4" aria-hidden />
+                  Decor market
+                </button>
               )}
               <button
                 type="button"
@@ -258,6 +277,15 @@ export function Dashboard() {
             setTeamChanged(false);
           }}
         />
+      )}
+      {shopping && me && (
+        <Dialog title="Decor market" wide onClose={() => setShopping(false)}>
+          <DecorMarket
+            wallet={me.wallet}
+            workspaces={workspaces.map((w) => ({ workspaceId: w.workspaceId, name: w.name, role: w.role }))}
+            onOfficeChanged={resetPreparedOffice}
+          />
+        </Dialog>
       )}
       {removing && (
         <DeleteWorkspaceDialog

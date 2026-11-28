@@ -70,7 +70,7 @@ export function buildArt(map: OfficeMap, config: OfficeConfig): OfficeArt {
     if (o.desk !== undefined) sheets[plateKey(o.desk)] = sheet([plateFrame(seatFor(config, o.desk))], pal);
   }
 
-  const a = avatarFrames(config.avatarId);
+  sheets["peer-marker"] = sheet([new Px(5, 5).box(0, 0, 5, 5, "w").frame()], pal);
   const light = paintLighting(map, sprites);
   const lighting = document.createElement("canvas");
   lighting.width = light.width;
@@ -81,9 +81,12 @@ export function buildArt(map: OfficeMap, config: OfficeConfig): OfficeArt {
     tiles: sheet(tileFrames(), pal),
     sheets,
     meta,
-    avatar: sheet(
-      [...AVATAR_ORDER.flatMap((f) => a.frames[f]), ...a.sit],
-      a.palette,
-    ),
+    avatar: avatarSheet(config.avatarId),
   };
+}
+
+/** Walk cycles (per facing) then the seated frames, for any avatar — the player's and teammates'. */
+export function avatarSheet(avatarId: string): Sheet {
+  const a = avatarFrames(avatarId);
+  return sheet([...AVATAR_ORDER.flatMap((f) => a.frames[f]), ...a.sit], a.palette);
 }

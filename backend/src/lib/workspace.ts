@@ -109,6 +109,27 @@ export function officeView(ws: Ws, me: Member, user: AuthUser) {
   };
 }
 
+/**
+ * Make `to` the owner and the previous owner (`from`) an admin, atomically: only if `from` is still
+ * the owner and `to` is still a member. Returns false if that changed meanwhile.
+ */
+export async function handOver(ws: Ws, from: Member | undefined, to: Member) {
+  if (!from) {
+    const res = await WorkspaceModel.updateOne(
+      { _id: ws._id, "members.role": { $ne: "owner" }, "members._id": to._id },
+      { $set: { "members.$[b].role": "owner" } },
+      { arrayFilters: [{ "b._id": to._id }] },
+    );
+    return res.modifiedCount > 0;
+  }
+  const res = await WorkspaceModel.updateOne(
+    { _id: ws._id, members: { $all: [{ $elemMatch: { _id: from._id, role: "owner" } }, { $elemMatch: { _id: to._id } }] } },
+    { $set: { "members.$[a].role": "admin", "members.$[b].role": "owner" } },
+    { arrayFilters: [{ "a._id": from._id }, { "b._id": to._id }] },
+  );
+  return res.modifiedCount > 0;
+}
+
 /** Save desk changes made by `assignDesks` without rewriting the whole workspace. */
 export async function saveDesks(ws: Ws, changes: DeskChange[], why: string, log: FastifyBaseLogger) {
   if (!changes.length) return;

@@ -6,17 +6,17 @@ const SPEED = 84; // px/s ≈ 5 tiles a second
 type Dir = "up" | "down" | "left" | "right";
 
 /** Register idle/walk animations for each facing on the "avatar" texture. */
-export function createAvatarAnims(scene: P.Scene) {
+export function createAvatarAnims(scene: P.Scene, texture = "avatar", suffix = "") {
   AVATAR_ORDER.forEach((facing, i) => {
     const base = i * FRAMES_PER_FACING;
     scene.anims.create({
-      key: `walk-${facing}`,
-      frames: [1, 2, 3, 4].map((n) => ({ key: "avatar", frame: base + n })),
+      key: `walk-${facing}${suffix}`,
+      frames: [1, 2, 3, 4].map((n) => ({ key: texture, frame: base + n })),
       frameRate: 8,
       repeat: -1,
     });
   });
-  scene.anims.create({ key: "sit-type", frames: [0, 1].map((n) => ({ key: "avatar", frame: SIT_FRAME + n })), frameRate: 3, repeat: -1 });
+  scene.anims.create({ key: `sit-type${suffix}`, frames: [0, 1].map((n) => ({ key: texture, frame: SIT_FRAME + n })), frameRate: 3, repeat: -1 });
 }
 
 type Point = { x: number; y: number };

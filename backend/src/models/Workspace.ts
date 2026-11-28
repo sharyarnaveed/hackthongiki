@@ -61,6 +61,24 @@ const deskRequestSchema = new Schema(
   { _id: true },
 );
 
+/**
+ * The workspace's ownership token on chain (contracts/WorkspaceOwnership.sol), as last synced.
+ * Absent until the first sync; the token id is the workspace id itself.
+ */
+const chainSchema = new Schema(
+  {
+    minted: { type: Boolean, default: false },
+    // Wallet holding the token: the owner's linked wallet, or the app wallet (custody). Lowercase.
+    holder: { type: String },
+    // Wallets the contract lets the token be sent to (members' linked wallets). Lowercase.
+    allowed: { type: [String], default: [] },
+    syncedAt: { type: Date },
+    // Why the last sync failed (cleared once it works).
+    error: { type: String },
+  },
+  { _id: false },
+);
+
 const workspaceSchema = new Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 40 },
@@ -86,6 +104,7 @@ const workspaceSchema = new Schema(
     layoutSavedAt: { type: Date },
     // Totals for the whole office (members who leave still count).
     stats: { type: statsSchema, default: () => ({}) },
+    chain: { type: chainSchema },
   },
   { timestamps: true, collection: "workspaces" },
 );

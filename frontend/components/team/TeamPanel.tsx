@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, Check, Copy, Crown, RefreshCw, Send, Shield, Trash2, UserMinus, X } from "lucide-react";
+import { ArrowLeftRight, Check, Copy, Crown, ExternalLink, Gem, RefreshCw, Send, Shield, Trash2, UserMinus, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { PixelSprite } from "@/components/pixel/PixelArt";
 import { avatarById, avatarIdle } from "@/components/onboarding/avatars";
@@ -29,6 +29,7 @@ import {
   type Invitation,
   type InviteCode,
   type MembersResponse,
+  type Ownership,
   type Role,
   type TeamMember,
 } from "./service";
@@ -128,9 +129,52 @@ export function TeamPanel({ workspaceId, onChange }: { workspaceId: string; onCh
         </ul>
       </section>
 
+      {data.ownership && <OwnershipSection ownership={data.ownership} owner={data.members.find((m) => m.role === "owner")} />}
+
       {manager && <InviteCodeSection workspaceId={workspaceId} run={run} />}
       {manager && data.invitations && <InvitationsSection workspaceId={workspaceId} invitations={data.invitations} run={run} />}
     </div>
+  );
+}
+
+/** "0x1234…abcd" */
+const short = (hex: string) => (hex.length > 12 ? `${hex.slice(0, 6)}…${hex.slice(-4)}` : hex);
+
+/** The workspace's ownership NFT: where it is, and a link to it on the block explorer. */
+function OwnershipSection({ ownership: o, owner }: { ownership: Ownership; owner?: TeamMember }) {
+  const ownerName = owner ? (owner.you ? "you" : owner.displayName) : "the owner";
+  return (
+    <section aria-labelledby="team-nft" className="flex flex-col gap-2">
+      <h3 id="team-nft" className="flex items-center gap-1.5 font-semibold">
+        <Gem className="size-4 text-terracotta" aria-hidden />
+        Ownership NFT
+      </h3>
+      <div className="flex flex-col gap-1 border-2 border-ink px-3 py-2 text-sm">
+        {!o.minted ? (
+          <p className="text-muted">{o.error ? "Not minted yet. Retrying shortly." : "Minting the token…"}</p>
+        ) : (
+          <>
+            <p>
+              Token <span className="font-mono">{short(o.tokenId)}</span>{" "}
+              {o.inCustody ? (
+                <>is held by TheSpace until {ownerName === "you" ? "you link" : `${ownerName} links`} a wallet.</>
+              ) : (
+                <>
+                  is in {ownerName === "you" ? "your" : `${ownerName}'s`} wallet <span className="font-mono">{o.holder && short(o.holder)}</span>.
+                </>
+              )}
+            </p>
+            <p className="text-xs text-muted">Whoever holds it owns the workspace. It can only be sent to members with a linked wallet.</p>
+          </>
+        )}
+        {o.minted && o.error && <p className="text-xs text-terracotta">Last sync failed: {o.error}. Retrying on its own.</p>}
+        {o.url && o.minted && (
+          <a href={o.url} target="_blank" rel="noreferrer" className="inline-flex w-fit items-center gap-1 text-xs font-semibold underline">
+            View on Snowtrace <ExternalLink className="size-3" aria-hidden />
+          </a>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -210,7 +254,7 @@ function MemberRow({
               <span className={`size-2 ${STATUS_DOT[m.status]}`} aria-hidden />
               {STATUS_LABEL[m.status]}
             </span>
-            <span>seen {ago(m.lastSeenAt)}</span>
+            {m.online ? <span className="font-semibold text-forest">● in the office now</span> : <span>seen {ago(m.lastSeenAt)}</span>}
           </p>
         </div>
         {canMoveDesk ? (

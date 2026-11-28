@@ -18,6 +18,9 @@ import { ApiError } from "@/lib/api";
 import { LoadingCard } from "./LoadingScreen";
 import { useSwapRequests } from "./useSwapRequests";
 import { countStat, ordinal, saveLayout } from "./lifeService";
+import { CallView, ChatDrawer, PeerTags, type ChatTab } from "./live/LiveUI";
+import { CALL_MAX } from "./live/protocol";
+import { createMedia, useCall, useLive, useVoice } from "./live/useLive";
 
 /** Actions the office page itself provides; the World adds the ones that need its own state. */
 type PageActions = Omit<OfficeActions, "onArrange" | "onOpen">;
@@ -156,6 +159,10 @@ function World({
   const [arrange, setArrange] = useState<ArrangeState | null>(null);
   const [arrangeSaving, setArrangeSaving] = useState(false);
   const [arrangeError, setArrangeError] = useState<string | null>(null);
+  // Live office: the chat drawer (and which tab), whether you're typing in it, unread messages.
+  const [chat, setChat] = useState<ChatTab | null>(null);
+  const [typing, setTyping] = useState(false);
+  const [unread, setUnread] = useState(0);
 
   /** Save changed settings to the account. */
   const persistPrefs = useCallback((patch: Partial<Settings>) => {
@@ -163,6 +170,46 @@ function World({
   }, []);
 
   const say = useCallback((text: string) => setToast({ id: Date.now(), text }), []);
+
+  // Teammates walking around, chat, proximity voice and video calls.
+  const liveHandlers = useMemo(
+    () => ({
+      onOfficeChanged: (by: string) => {
+        say(`${by} changed the office — loading the new layout.`);
+        reload(true);
+      },
+      onError: say,
+    }),
+    [say, reload],
+  );
+  const { live, state: liveState, peers, bubbles, nearby, say: sayNearby } = useLive(workspaceId, bus, ready, liveHandlers);
+  const [media] = useState(createMedia);
+  useEffect(() => () => media.player.close(), [media]);
+  const call = useCall(live, peers, media, say);
+  const voice = useVoice(live, bus, media, call.room, say);
+  // Who's talking in the call, for the tile highlight.
+  const [callTalking, setCallTalking] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (!call.room) return setCallTalking(new Set());
+    const t = setInterval(() => {
+      const now = performance.now();
+      setCallTalking(new Set([...media.player.heard].filter(([, at]) => now - at < 600).map(([id]) => id)));
+    }, 300);
+    return () => clearInterval(t);
+  }, [call.room, media]);
+  const chatOpen = chat !== null;
+  const names = useMemo(() => new Map(peers.map((p) => [p.id, p.name])), [peers]);
+
+  // Count messages from others while the chat is closed.
+  useEffect(() => {
+    if (!live || chatOpen) return;
+    return live.on((msg) => {
+      if (msg.t === "chat" && msg.message.authorId !== live.me) setUnread((n) => n + 1);
+    });
+  }, [live, chatOpen]);
+  useEffect(() => {
+    if (chatOpen) setUnread(0);
+  }, [chatOpen]);
 
   const setSound = useCallback(
     (on: boolean) => {
@@ -422,14 +469,30 @@ function World({
     [say],
   );
 
-  // Panels pause movement (re-sent when a new map is ready); Escape closes them.
+  // Panels, typing in the chat and video calls pause movement (re-sent when a new map is ready).
   useEffect(() => {
-    bus.emit("set-paused", panel !== null);
+    bus.emit("set-paused", panel !== null || typing || call.room !== null);
+  }, [panel, typing, call.room, bus, ready]);
+
+  // Enter opens the chat (when nothing else is open).
+  useEffect(() => {
+    if (panel || chatOpen || arrange || call.room) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || (e.target as HTMLElement)?.closest?.("input, textarea, button, select, a")) return;
+      e.preventDefault();
+      setChat("office");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panel, chatOpen, arrange, call.room]);
+
+  // Escape closes panels.
+  useEffect(() => {
     if (!panel) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setPanel(null);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panel, bus, ready]);
+  }, [panel]);
 
   useEffect(() => {
     if (ready) bus.emit("set-minimap", settings.minimap);
@@ -444,7 +507,15 @@ function World({
   return (
     <main className="fixed inset-0 overflow-hidden bg-[#2b2a22] font-display text-ink">
       <div ref={host} className="absolute inset-0 [&_canvas]:block" aria-label={`${config.workspaceName}, an explorable pixel office`} role="application" />
-      <PlayerAnchor ref={anchor} name={config.displayName} status={status} showName={settings.nameTag} prompt={panel || arrange ? null : prompt} />
+      <PeerTags bus={bus} peers={peers} bubbles={bubbles} showNames={settings.nameTag} talkingWith={voice.talkingWith} />
+      <PlayerAnchor
+        ref={anchor}
+        name={config.displayName}
+        status={status}
+        showName={settings.nameTag}
+        prompt={panel || arrange ? null : prompt}
+        bubble={live?.me ? bubbles[live.me]?.text : undefined}
+      />
       {arrange ? (
         <ArrangeBar state={arrange} saving={arrangeSaving} error={arrangeError} onCancel={cancelArrange} onSave={saveArrange} />
       ) : (
@@ -463,8 +534,52 @@ function World({
           onNotices={() => setPanel("notices")}
           onStats={() => setPanel("stats")}
           swapsWaiting={swapsWaiting.length}
+          live={
+            workspaceId
+              ? {
+                  online: liveState === "online",
+                  here: peers.length + 1,
+                  unread,
+                  voiceOn: voice.on,
+                  talkingWith: voice.talkingWith.map((id) => names.get(id) ?? "a teammate"),
+                  onChat: () => setChat((c) => (c ? null : "office")),
+                  onPeople: () => setChat("people"),
+                  onVoice: () => {
+                    voice.toggle();
+                    if (!voice.on) say("Mic on — walk up to a teammate with their mic on to talk. Further away is quieter.");
+                  },
+                }
+              : undefined
+          }
         />
       )}
+      {liveState === "replaced" && (
+        <p role="status" className="absolute inset-x-0 bottom-20 mx-auto w-fit max-w-[90vw] border-2 border-ink bg-sun px-3 py-2 text-sm font-semibold shadow-pixel-sm">
+          This office is open in another tab, so teammates can’t see you here.{" "}
+          <button type="button" className="underline" onClick={() => live?.reconnect()}>
+            Use this tab
+          </button>
+        </p>
+      )}
+      <AnimatePresence>
+        {chat && workspaceId && !arrange && (
+          <ChatDrawer
+            key="chat"
+            workspaceId={workspaceId}
+            live={live}
+            liveState={liveState}
+            room={room}
+            peers={peers}
+            nearby={nearby}
+            myName={config.displayName}
+            myStatus={status}
+            initialTab={chat}
+            onSay={sayNearby}
+            onFocusChange={setTyping}
+            onClose={() => setChat(null)}
+          />
+        )}
+      </AnimatePresence>
       <AnimatePresence>{toast && <Toast key={toast.id} text={toast.text} />}</AnimatePresence>
       <AnimatePresence>
         {panel && (
@@ -483,6 +598,36 @@ function World({
               persistPrefs(patch);
             }}
             onClose={() => setPanel(null)}
+            meeting={{
+              room,
+              canCall: !!live?.callRooms.includes(room),
+              inCall: peers.filter((p) => p.call === room).map((p) => p.name),
+              full: peers.filter((p) => p.call === room).length >= CALL_MAX,
+              onJoin: () => {
+                setPanel(null);
+                call.join(room);
+              },
+            }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {call.room && (
+          <CallView
+            key="call"
+            room={call.room}
+            local={call.local}
+            frames={media.frames}
+            streams={call.streams}
+            talking={callTalking}
+            peers={peers}
+            myName={config.displayName}
+            muted={call.muted}
+            cameraOff={call.cameraOff}
+            hasVideo={call.hasVideo}
+            onMute={call.toggleMute}
+            onCamera={call.toggleCamera}
+            onLeave={call.leave}
           />
         )}
       </AnimatePresence>

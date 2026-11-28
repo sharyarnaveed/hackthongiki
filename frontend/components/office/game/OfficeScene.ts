@@ -7,6 +7,8 @@ import { INTERACTIONS, type Interaction, type InteractionId } from "./interactio
 import { blocksTheWay, groupOf, isMovable, kindLabel, placementProblem, type FurnitureMeta, type FurnitureMove, type LayoutFloor } from "./layoutEdit";
 import type { PlacedObject } from "./map";
 import { PlayerController, createAvatarAnims, type SeatPose } from "./player";
+import { RemoteAvatars } from "./remotes";
+import { AVATAR_ANIMS, type AvatarAnim } from "../live/protocol";
 import { seatFor, seatInteraction } from "./seating";
 import { T, TILE } from "./tiles";
 
@@ -66,6 +68,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
     private puffs: P.GameObjects.Image[] = [];
     private coffeeAt = { x: 0, y: 0 };
     private cleanup: (() => void)[] = [];
+    private remotes!: RemoteAvatars;
 
     /* Arrange mode (owner): pick furniture up and put it down elsewhere. */
     private arranging = false;
@@ -135,6 +138,9 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         mini.ignore(arrow);
         this.layoutOnly.push(deskMarker, arrow);
       }
+      // Teammates in the office right now (the page re-sends everyone once the scene is ready).
+      this.remotes = new RemoteAvatars(this, cam);
+      bus.poseOf = () => this.pose();
       this.events.on("postupdate", () => marker.setPosition(this.player.sprite.x, this.player.sprite.y - 8));
       this.events.on("render", () => this.emitAnchor());
       this.cleanup.push(onResize(this, place));
@@ -161,6 +167,9 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         bus.on("set-paused", (p) => this.setPaused(p)),
         bus.on("set-minimap", (on) => mini.setVisible(on)),
         bus.on("set-arrange", (on) => this.setArranging(on)),
+        bus.on("peer-upsert", (peer) => this.remotes.upsert(peer)),
+        bus.on("peer-move", ({ id, ...pose }) => this.remotes.move(id, pose)),
+        bus.on("peer-leave", (id) => this.remotes.remove(id)),
         bus.on("arrange-saved", () => this.endArranging(false)),
         bus.on("set-status", (status) => {
           if (status === "focusing") this.goToDesk();
@@ -171,6 +180,8 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       // Destroying the game fires "destroy" (not "shutdown"), so unsubscribe on both.
       const teardown = () => {
         if (bus.positionOf) bus.positionOf = null;
+        bus.poseOf = null;
+        this.remotes.destroy();
         bus.arrangeMoves = null;
         this.cleanup.forEach((fn) => fn());
         this.cleanup = [];
@@ -218,6 +229,20 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
       this.visuals.set(index, drawn);
       if (this.anims.exists(key) && !reducedMotion) {
         img.play({ key, startFrame: (o.tx + o.ty) % sheet.count });
+      }
+
+      // Decor NFTs twinkle, so they stand out from the office's own furniture.
+      if (o.nft) {
+        if (!this.textures.exists("nft-spark")) {
+          const g = this.add.graphics();
+          g.fillStyle(0xf3c64a).fillRect(2, 0, 1, 5).fillRect(0, 2, 5, 1);
+          g.fillStyle(0xffffff).fillRect(2, 2, 1, 1);
+          g.generateTexture("nft-spark", 5, 5);
+          g.destroy();
+        }
+        const spark = this.add.image(x + sheet.frameW - 1, bottom - sheet.frameH + 1, "nft-spark").setOrigin(0.5).setDepth(bottom + 0.6);
+        drawn.push({ obj: spark, x: spark.x, y: spark.y, depth: spark.depth, sorted: true });
+        if (!reducedMotion) this.tweens.add({ targets: spark, alpha: 0.3, duration: 900, yoyo: true, repeat: -1, ease: "Sine.inOut" });
       }
 
       if (meta.footprint) {
@@ -550,6 +575,7 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
 
     update(_time: number, delta: number) {
       const { bus, prepared } = this.data_;
+      this.remotes.update(delta);
       if (this.arranging) {
         this.player.update(false);
         this.pan(delta);
@@ -577,7 +603,17 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
     private emitAnchor() {
       const cam = this.cameras.main;
       const s = this.player.sprite;
-      this.data_.bus.onAnchor?.((s.x - cam.worldView.x) * cam.zoom, (s.y - s.height - cam.worldView.y) * cam.zoom);
+      const { bus } = this.data_;
+      bus.onAnchor?.((s.x - cam.worldView.x) * cam.zoom, (s.y - s.height - cam.worldView.y) * cam.zoom);
+      if (bus.onPeerAnchor) this.remotes.anchors(bus.onPeerAnchor);
+    }
+
+    /** How the player looks right now, for teammates' screens. */
+    private pose() {
+      const s = this.player.sprite;
+      const key = s.anims.isPlaying ? s.anims.currentAnim?.key : undefined;
+      const anim = key && (AVATAR_ANIMS as readonly string[]).includes(key) ? (key as AvatarAnim) : null;
+      return { x: Math.round(s.x), y: Math.round(s.y), frame: Number(s.frame.name) || 0, anim, flip: s.flipX, depth: s.depth, room: this.room };
     }
   };
 }

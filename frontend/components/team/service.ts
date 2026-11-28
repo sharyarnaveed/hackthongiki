@@ -20,6 +20,8 @@ export type TeamMember = {
   statusUpdatedAt?: string;
   joinedAt?: string;
   lastSeenAt?: string;
+  /** In the office right now (connected to the live office). */
+  online?: boolean;
   you: boolean;
 };
 
@@ -33,7 +35,26 @@ export type DeskRequest = {
   to: { memberId: string; displayName: string; desk: number };
   createdAt: string;
 };
-export type MembersResponse = { members: TeamMember[]; invitations?: Invitation[]; deskRequests?: DeskRequest[]; role: Role; desks: number };
+/**
+ * The workspace's ownership NFT on chain, as last synced. Null when on-chain ownership is off.
+ * It sits in the owner's linked wallet, or with TheSpace ("custody") while they haven't linked one.
+ */
+export type Ownership = {
+  chainId: number;
+  contract: string;
+  /** The workspace id as a number: "0x" + the id. */
+  tokenId: string;
+  minted: boolean;
+  holder: string | null;
+  inCustody: boolean;
+  syncedAt: string | null;
+  /** Why the last sync failed; it retries on its own. */
+  error: string | null;
+  /** The token on the block explorer (Snowtrace). */
+  url: string | null;
+  contractUrl: string | null;
+};
+export type MembersResponse = { members: TeamMember[]; invitations?: Invitation[]; deskRequests?: DeskRequest[]; role: Role; desks: number; ownership?: Ownership | null };
 
 const ws = (id: string) => `/api/workspaces/${encodeURIComponent(id)}`;
 

@@ -1,4 +1,16 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+/**
+ * Where the API lives. NEXT_PUBLIC_API_URL wins when set (production). Otherwise:
+ * on localhost the API is on :4000; anywhere else (an ngrok link from `npm run share`)
+ * it's on the same origin as the page, under /api.
+ */
+function apiUrl() {
+  const fromEnv = process.env.NEXT_PUBLIC_API_URL;
+  if (fromEnv) return fromEnv.replace(/\/$/, "");
+  if (typeof window !== "undefined" && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname)) return "";
+  return "http://localhost:4000";
+}
+
+export const API_URL = apiUrl();
 
 const TIMEOUT_MS = 15_000;
 
