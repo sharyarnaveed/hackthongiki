@@ -7,6 +7,7 @@ import { live } from "./live/hub.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { workspaceRoutes } from "./routes/workspaces.ts";
 import { waitlistRoutes } from "./routes/waitlist.ts";
+import { marketRoutes } from "./routes/decor.ts";
 
 /** Routes whose request bodies must never be logged (passwords, codes). */
 const SECRET_BODY = /^\/api\/auth/;
@@ -72,6 +73,7 @@ export async function buildApp() {
   await app.register(authRoutes, { prefix: "/api/auth" });
   await app.register(workspaceRoutes, { prefix: "/api/workspaces" });
   await app.register(waitlistRoutes, { prefix: "/api/waitlist" });
+  await app.register(marketRoutes, { prefix: "/api/market" });
 
   app.get("/api/health", async () => ({ ok: true }));
 

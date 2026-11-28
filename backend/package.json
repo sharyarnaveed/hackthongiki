@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx watch --env-file=.env app.ts",
     "start": "tsx --env-file=.env app.ts",
-    "test": "MAIL_TRANSPORT=memory LOG_LEVEL=${LOG_LEVEL:-silent} LOG_REQUESTS=off node --env-file=.env --import tsx --test --test-concurrency=1 test/*.test.ts"
+    "test": "MAIL_TRANSPORT=memory LOG_LEVEL=${LOG_LEVEL:-silent} LOG_REQUESTS=off node --env-file=.env --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "seed:decor": "tsx --env-file=.env scripts/seed-decor.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

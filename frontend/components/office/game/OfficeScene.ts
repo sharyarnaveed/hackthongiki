@@ -231,6 +231,20 @@ export function createOfficeScene(Phaser: PreparedOffice["Phaser"]) {
         img.play({ key, startFrame: (o.tx + o.ty) % sheet.count });
       }
 
+      // Decor NFTs twinkle, so they stand out from the office's own furniture.
+      if (o.nft) {
+        if (!this.textures.exists("nft-spark")) {
+          const g = this.add.graphics();
+          g.fillStyle(0xf3c64a).fillRect(2, 0, 1, 5).fillRect(0, 2, 5, 1);
+          g.fillStyle(0xffffff).fillRect(2, 2, 1, 1);
+          g.generateTexture("nft-spark", 5, 5);
+          g.destroy();
+        }
+        const spark = this.add.image(x + sheet.frameW - 1, bottom - sheet.frameH + 1, "nft-spark").setOrigin(0.5).setDepth(bottom + 0.6);
+        drawn.push({ obj: spark, x: spark.x, y: spark.y, depth: spark.depth, sorted: true });
+        if (!reducedMotion) this.tweens.add({ targets: spark, alpha: 0.3, duration: 900, yoyo: true, repeat: -1, ease: "Sine.inOut" });
+      }
+
       if (meta.footprint) {
         for (let j = 0; j < fh; j++) for (let i = 0; i < fw; i++) blocked.putTileAt(T.BLOCK, o.tx + i, o.ty - j);
       }

@@ -31,7 +31,7 @@ const boardOf = async (workspaceId: unknown) =>
   (await NoticeModel.find({ workspaceId }).sort({ pinned: -1, createdAt: -1 }).limit(MAX_NOTICES)).map(noticeView);
 
 /** Footprints and layers of every furniture kind in this office's style (rugs and the sign are flat). */
-function furnitureMeta(office: OfficeMap): FurnitureMeta {
+export function furnitureMeta(office: OfficeMap): FurnitureMeta {
   const meta: FurnitureMeta = { rug: { footprint: null, layer: "floor" }, sign: { footprint: null, layer: "wall" } };
   for (const [kind, def] of Object.entries(catalog(office.theme))) meta[kind] = { footprint: def.footprint, layer: def.layer };
   return meta;

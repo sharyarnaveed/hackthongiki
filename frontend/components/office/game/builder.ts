@@ -21,6 +21,8 @@ export interface PlacedObject {
   /** Static variant frame (e.g. which painting). */
   frame?: number;
   interact?: InteractionId;
+  /** Decor NFT (OfficeDecor contract) the owner placed; removed if their wallet stops holding it. */
+  nft?: { tokenId: number; name: string };
   /** Team desk number (0-based) for assigned desks; see `seating.ts`. */
   desk?: number;
 }

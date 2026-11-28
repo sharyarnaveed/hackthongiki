@@ -4,9 +4,11 @@ import { sendInvitationEmail, sendOwnershipEmail, sendRemovedEmail } from "../li
 import { EMAIL_RE, LIMITS, formatCode, newInviteCode, rateLimiter } from "../lib/onboarding.ts";
 import { canManage, canRemove } from "../lib/roles.ts";
 import { assignDesks } from "../lib/desks.ts";
+import { syncWorkspace } from "../lib/ownership.ts";
 import {
   NOT_FOUND,
   codeIsActive,
+  handOver,
   invitationsView,
   inviteView,
   memberView,
@@ -291,6 +293,8 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ message: target.role === "owner" ? "The owner can't be removed." : "Only the owner can remove an admin." });
     }
     await WorkspaceModel.updateOne({ _id: ws._id }, { $pull: { members: { _id: target._id } } });
+    // Their wallet may no longer receive the ownership token.
+    syncWorkspace(ws._id);
     live.kick(ws.id, mid(target), "You were removed from the workspace");
     req.log.info(
       { id: ws.id, by: req.user!.email, removed: target.displayName, role: target.role, freedDesk: typeof target.desk === "number" ? target.desk + 1 : "none" },
@@ -334,16 +338,13 @@ export const teamRoutes: FastifyPluginAsync = async (app) => {
       if (!target) return reply.code(404).send({ message: "That person isn't in this workspace any more." });
       if (mid(target) === mid(me)) return reply.code(400).send({ message: "You already own this workspace." });
       // Atomic: only if I'm still the owner and they're still here.
-      const res = await WorkspaceModel.updateOne(
-        { _id: ws._id, members: { $all: [{ $elemMatch: { _id: me._id, role: "owner" } }, { $elemMatch: { _id: target._id } }] } },
-        { $set: { "members.$[a].role": "admin", "members.$[b].role": "owner" } },
-        { arrayFilters: [{ "a._id": me._id }, { "b._id": target._id }] },
-      );
-      if (!res.modifiedCount) {
+      if (!(await handOver(ws, me, target))) {
         req.log.warn({ id: ws.id, by: req.user!.email }, "⚠️  Transfer lost a race: roles changed meanwhile");
         return reply.code(409).send({ message: "Roles just changed. Refresh and try again." });
       }
       req.log.info({ id: ws.id, from: me.displayName, to: target.displayName }, "👑 Ownership transferred — saved to MongoDB");
+      // The ownership token follows: to the new owner's wallet, or into custody if they haven't linked one.
+      syncWorkspace(ws._id);
       await notify(target.userId, "new owner", req.log, (to, name) => sendOwnershipEmail(to, name, ws.name, me.displayName));
       const updated = (await WorkspaceModel.findById(ws._id))!;
       // Owner sits first: re-check desks in case the order matters for anyone without one.

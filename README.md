@@ -255,34 +255,53 @@ Set `CLIENT_URL` in `backend/.env` to the ngrok link if you want email links to 
 - [x] Move furniture around and save the layout
 
 ### Blockchain (Web3 office)
-Everything runs on the Avalanche Fuji testnet (C-Chain) first, so nobody spends real money. Contracts are written in Remix — see `contracts/README.md`.
+Everything runs on **Avalanche Fuji**, a free test network, so nobody spends real money. Smart contracts are deployed from the browser with Remix: see `contracts/README.md`.
+Every blockchain feature is optional: without a wallet, the app works exactly as it does today.
 
-**Identity & access**
-- [ ] **Sign in with a wallet** (Sign-In with Ethereum, EIP-4361) next to email/password, and link a wallet to an existing account
-- [ ] **Token-gated workspaces**: the owner can let anyone holding a chosen NFT or token join, instead of (or as well as) the invitation code
-- [ ] **Workspace ownership as an NFT**: each office gets an ownership token; sending it to someone else transfers the workspace (kept in sync with the existing transfer flow)
-- [ ] Use an NFT you own as your avatar or name-tag badge (ownership checked on the server)
+**Step 1: Setup (do once)**
+- [x] Write the workspace ownership contract (`contracts/WorkspaceOwnership.sol`)
+- [ ] Make a MetaMask wallet for the app ("TheSpace app") and get free test AVAX from the faucet
+- [ ] Deploy the contract in Remix and click through the test table in `contracts/README.md`
+- [ ] Put the contract address and the app wallet's private key in `backend/.env` (never in the repo or the chat)
 
-**Badges & rewards**
-- [ ] **Achievement badges** as soulbound (non-transferable, ERC-5192) tokens, earned from office stats: 100 coffees, 10 hours of focus, first cat pet, 30-day streak
-- [ ] **Proof of attendance**: stand-ups, events and meetings in the office can mint a small attendance badge to everyone who was there
-- [ ] **Kudos**: send a teammate a thank-you token (or a testnet "coffee tip") from the members panel, with a public leaderboard
-- [ ] Badge shelf in the office and on the profile, showing your on-chain badges
+**Step 2: Wallets**
+- [x] Sign in with a wallet (MetaMask), next to email and password
+- [x] Link a wallet to an existing account, and unlink it
 
-**Team decisions**
-- [ ] **On-chain polls** on the notice board: members vote with a wallet signature (gasless, Snapshot-style), the result is final and anyone can check it
-- [ ] Optional team treasury (multisig wallet) shown in the office, with proposals voted on by members
+**Step 3: Own your office as an NFT**
+- [x] Every workspace gets one NFT; whoever holds it owns the workspace
+- [x] The backend keeps it in sync: mints it when a workspace is made, moves it when ownership is transferred in the app, burns it when the workspace is deleted
+- [x] The NFT can only be sent to members of that workspace
+- [x] Sending the NFT to a member in MetaMask makes them the owner in the app
+- [x] Members panel shows the NFT with a Snowtrace link
+- [ ] Try it end to end on Fuji once the contract is deployed
 
-**Trust & transparency**
-- [ ] **Tamper-proof audit log**: important admin actions (role changes, removals, ownership transfers, layout saves) are hashed together and the daily Merkle root is written on-chain, so the history can be checked but not rewritten
-- [ ] Office layout snapshots: save a hash of the saved office on-chain, or mint it as a collectible "office NFT"
+**Step 4: NFT decor and marketplace**
+- [x] Write the decor contract: a shop and a marketplace in one (`contracts/OfficeDecor.sol`)
+- [x] Shop: buy decor NFTs (plants, lamps, a fireplace…) with test AVAX
+- [x] Marketplace: put your decor up for sale, buy other people's, cancel a sale
+- [x] The owner places decor from their wallet in the office and moves it like furniture (it sparkles)
+- [x] If decor is sold, listed or sent away, it leaves the office by itself
+- [ ] Deploy it in Remix, run `npm run seed:decor`, and try it on Fuji
+- [ ] Later: paintings and posters for the walls, and showing who owns each piece when you walk up to it
 
-**Under the hood**
-- [ ] Smart contracts (Solidity) with Foundry or Hardhat, plus contract tests
-- [ ] Frontend wallet connect with wagmi + viem; backend reads the chain with viem and listens for events (badges minted, ownership token moved)
-- [ ] Gas sponsored for users (account abstraction, ERC-4337 paymaster), so people without crypto can still earn badges
-- [ ] No private keys in the database or the repo; the minting key lives in an env variable / secret manager
-- [ ] Every on-chain feature is optional: a workspace works exactly as today without a wallet
+**Step 5: Badges and rewards**
+- [ ] Badges you earn from office stats (100 coffees, 10 hours of focus, first cat pet, 30-day streak); badges can't be sent to anyone else
+- [ ] Attendance badge for everyone who came to a meeting or event
+- [ ] Kudos: send a teammate a thank-you token from the members panel, with a leaderboard
+- [ ] A badge shelf in the office and on your profile
+- [ ] Use an NFT you own as your avatar or name-tag badge
+
+**Step 6: Team features**
+- [ ] Token-gated join: anyone holding a chosen NFT can join, without an invite code
+- [ ] Polls on the notice board where members vote by signing with their wallet (free, no gas)
+- [ ] Optional shared team wallet, where members vote on spending
+
+**Later (nice to have)**
+- [ ] A history of admin actions (role changes, removals, transfers) that's saved on the blockchain so nobody can secretly change it
+- [ ] Save a snapshot of the office layout on the blockchain, or turn it into a collectible NFT
+- [ ] The app pays the gas fees, so people without crypto can still earn badges
+- [ ] Move the contract into a proper project (Hardhat or Foundry) with automatic tests
 
 ### Production
 - [ ] Shared rate limiter (Redis) instead of in-memory

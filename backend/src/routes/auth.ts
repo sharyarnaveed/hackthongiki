@@ -4,6 +4,7 @@ import { rateLimiter } from "../lib/onboarding.ts";
 import { hashPassword, verifyPassword } from "../lib/password.ts";
 import { authUserOf, endSession, requireAuth, startSession } from "../lib/session.ts";
 import { issueNonce, verifySiwe } from "../lib/siwe.ts";
+import { syncUserWorkspaces } from "../lib/ownership.ts";
 import { CODE_TTL_MS, MAX_ATTEMPTS, RESEND_COOLDOWN_MS, codeMatches, hashCode, newCode } from "../lib/verification.ts";
 import { UserModel } from "../models/User.ts";
 import { DEFAULT_PREFERENCES, preferencesOf, type Preferences } from "../lib/defaults.ts";
@@ -294,6 +295,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!user) return reply.code(404).send({ message: "Account not found." });
     req.log.info({ user: user.email, wallet: check.address }, "👛 Wallet linked");
+    // The new wallet may receive (or, as owner, holds) each workspace's ownership token.
+    await syncUserWorkspaces(req.user!.id);
     return reply.send({ user: authUserOf(user) });
   });
 
@@ -302,6 +305,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const user = await UserModel.findByIdAndUpdate(req.user!.id, { $unset: { walletAddress: 1, walletLinkedAt: 1 } }, { returnDocument: "after" });
     if (!user) return reply.code(404).send({ message: "Account not found." });
     req.log.info({ user: user.email }, "👛 Wallet unlinked");
+    // Revoke it on every workspace's token; tokens it held go back to the app's custody.
+    await syncUserWorkspaces(req.user!.id);
     return reply.send({ user: authUserOf(user) });
   });
 
