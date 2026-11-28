@@ -59,6 +59,16 @@ export function tilesOf(o: PlacedObject, meta: FurnitureMeta): Spot[] {
   return out;
 }
 
+/**
+ * The whole tiles the entrance covers. The spawn point can sit between two tiles
+ * (e.g. tx 13.5 on even-width plans), in which case it covers both.
+ */
+export function entranceTiles(spawn: Spot): Spot[] {
+  const xs = [...new Set([Math.floor(spawn.tx), Math.ceil(spawn.tx)])];
+  const ys = [...new Set([Math.floor(spawn.ty), Math.ceil(spawn.ty)])];
+  return xs.flatMap((tx) => ys.map((ty) => ({ tx, ty })));
+}
+
 const solid = (o: PlacedObject, meta: FurnitureMeta) => !!meta[o.kind]?.footprint && meta[o.kind]?.layer === "sort";
 const key = (x: number, y: number) => `${x},${y}`;
 
@@ -86,6 +96,7 @@ export function placementProblem(floor: LayoutFloor, group: number[], meta: Furn
     if (!own.has(i) && o.kind !== "rug" && meta[o.kind]?.layer === "sort" && !solid(o, meta)) otherSpots.add(key(o.tx, o.ty));
   });
   const mine = new Set<string>();
+  const entrance = new Set(entranceTiles(floor.spawn).map((t) => key(t.tx, t.ty)));
   for (const i of group) {
     const o = floor.objects[i];
     if (!o) return "That piece isn't in the office any more.";
@@ -95,7 +106,7 @@ export function placementProblem(floor: LayoutFloor, group: number[], meta: Furn
       if (floor.walls[t.ty]?.[t.tx]) return "That spot is inside a wall.";
       const k = key(t.tx, t.ty);
       if (others.has(k) || otherSpots.has(k) || mine.has(k)) return "Something is already standing there.";
-      if (t.tx === floor.spawn.tx && t.ty === floor.spawn.ty) return "Keep the entrance clear.";
+      if (entrance.has(k)) return "Keep the entrance clear.";
       mine.add(k);
     }
   }
@@ -117,7 +128,7 @@ export function unreachable(floor: LayoutFloor, meta: FurnitureMeta): number[] {
     seen.add(k);
     queue.push({ tx: x, ty: y });
   };
-  visit(floor.spawn.tx, floor.spawn.ty);
+  for (const t of entranceTiles(floor.spawn)) visit(t.tx, t.ty);
   for (let q = 0; q < queue.length; q++) {
     const { tx, ty } = queue[q];
     visit(tx + 1, ty);

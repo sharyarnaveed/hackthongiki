@@ -35,7 +35,8 @@ export async function buildApp() {
   });
 
   // credentials: true lets the browser send the session cookie cross-origin (frontend :3000 → API :4000).
-  await app.register(cors, { origin: CLIENT_ORIGIN, credentials: true });
+  // @fastify/cors only allows GET/HEAD/POST by default; the API also uses PUT, PATCH and DELETE.
+  await app.register(cors, { origin: CLIENT_ORIGIN, credentials: true, methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] });
   await app.register(cookie);
   // Live office (presence, movement, chat, relayed voice/video). The biggest frame is a 48 KB video snapshot.
   await app.register(websocket, { options: { maxPayload: 64 * 1024 } });

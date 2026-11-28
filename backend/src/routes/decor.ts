@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { blocksTheWay, placementProblem, type LayoutFloor } from "@/components/office/game/layoutEdit";
+import { blocksTheWay, entranceTiles, placementProblem, tilesOf, type LayoutFloor } from "@/components/office/game/layoutEdit";
 import type { OfficeMap, PlacedObject } from "@/components/office/game/map";
 import { live } from "../live/hub.ts";
 import { decorEnabled, heldToken, marketView, myDecorView, syncDecor } from "../lib/decor.ts";
@@ -41,17 +41,22 @@ const MAX_TRIES = 600;
  * The first spot near the entrance where `obj` fits with the same rules as moving furniture
  * (inside the walls, nothing in the way, doesn't box anything off), or null.
  */
-function freeSpot(office: OfficeMap, obj: PlacedObject) {
+export function freeSpot(office: OfficeMap, obj: PlacedObject) {
   const meta = furnitureMeta(office);
+  // Leave a one-tile gap around the entrance so new decor doesn't crowd the doorway.
+  const nearDoor = new Set(entranceTiles(office.spawn).flatMap(({ tx, ty }) => [-1, 0, 1].flatMap((dy) => [-1, 0, 1].map((dx) => `${tx + dx},${ty + dy}`))));
   const before: LayoutFloor = office;
   const seen = new Set<string>();
-  const queue = [{ tx: office.spawn.tx, ty: office.spawn.ty }];
-  seen.add(`${office.spawn.tx},${office.spawn.ty}`);
+  // The spawn point can sit between two tiles (e.g. tx 13.5); objects need whole tiles.
+  const start = { tx: Math.floor(office.spawn.tx), ty: Math.floor(office.spawn.ty) };
+  const queue = [start];
+  seen.add(`${start.tx},${start.ty}`);
   for (let tries = 0; queue.length && tries < MAX_TRIES; tries++) {
     const at = queue.shift()!;
     const candidate = { ...obj, tx: at.tx, ty: at.ty };
     const next: LayoutFloor = { ...office, objects: [...office.objects, candidate] };
-    if (!placementProblem(next, [next.objects.length - 1], meta) && !blocksTheWay(before, next, meta)) return { tx: at.tx, ty: at.ty };
+    const crowdsDoor = tilesOf(candidate, meta).some((t) => nearDoor.has(`${t.tx},${t.ty}`));
+    if (!crowdsDoor && !placementProblem(next, [next.objects.length - 1], meta) && !blocksTheWay(before, next, meta)) return { tx: at.tx, ty: at.ty };
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const tx = at.tx + dx;
       const ty = at.ty + dy;
